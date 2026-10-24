@@ -16,6 +16,14 @@
 - **修复**：欢迎提示加入最高优先级的名称一致性规则；生成文本归一化时把模板旧名替换为 `bot.name`；普通聊天的 system prompt 也加入当前身份规则；启动时修复已经写入数据库的旧欢迎消息。
 - **回归**：`smoke` 验证 fallback 使用当前名称、生成文本旧名替换、启动修复改写旧消息；既有 welcome 去重/重新生成测试继续通过。
 
+
+## 2026-10-24 · HTML 游戏预览只有布局、没有画面和交互
+
+- **症状**：同一份 HTML 在浏览器中能玩，产物预览中只显示背景和按钮，Canvas 空白、点击和键盘操作无效。
+- **根因**：预览把原文放进 `srcDoc`，`sandbox=""` 禁止所有脚本；即使添加 `allow-scripts`，srcdoc 继承的主界面 CSP `script-src 'self'` 仍禁止内嵌脚本。相对资源也没有工作区文档地址可用。
+- **修复**：为 HTML 使用独立的 `covan-preview` 能力地址与响应 CSP；只开放 iframe 脚本，保留 opaque origin、无 Covan/Node 桥和导航边界。资源使用词法 + realpath 工作区校验、正确 MIME 和 CORS，能力随预览切换/关闭或主页面离开而撤销。主界面和打印的脚本策略保持原约束。
+- **回归**：`npm run test:html-preview` 通过临时 profile、Mock 数据和 loopback 依赖验证 Canvas 像素、动画、内嵌事件、鼠标/方向键、CSS、ES modules、相对图片与 fetch、重新加载；同时拒绝父页面/桥/Node、弹窗、私有协议、本机文件、符号链接和跨工作区访问，验证能力撤销与错误显示。
+
 ## 2026-10-20 · 生成式 UI 的提示词与解析器使用了两套围栏名
 
 - **症状**：Agent 能正常返回 OpenUI 源码，但聊天里只显示 Markdown 或原始代码围栏，交互界面不出现。

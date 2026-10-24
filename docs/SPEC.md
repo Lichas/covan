@@ -463,7 +463,10 @@ type CovanEvent =
 - Agent 的文件工具只能使用该目录内的相对路径，词法路径检查后还要用 realpath 防止符号链接逃逸。
 - 面板可列文件（深度 2）、预览文本文件（<=200KB）、`openWorkspace` 打开系统文件夹。
 - `workspace_write` / `workspace_edit` 成功后，把文件元数据结构化记录在当前 Bot 消息的 `artifacts` 中；同一路径在一轮内去重并保留最后操作。聊天内显示独立交付卡，支持在右侧产物预览窗查看 Markdown、HTML、TXT、代码、图片和 PDF，预览窗可拖拽左边缘调整宽度；也可打开工作区、在系统文件夹中定位。记录随消息持久化，重启后仍可见。写入时广播 `workspace-updated`，已打开的右侧工作区即时刷新。
-- 产物预览的文本类内容仍通过 `readWorkspaceFile` 读取，受 200KB 和二进制检测限制；图片与 PDF 通过 `covan-workspace://file/<botId>/<path>` 只读协议加载。主进程必须用 `resolveWorkspaceFile` 校验 Bot 工作区边界后再返回文件流，不向 renderer 暴露任意本机路径。
+- Markdown、TXT 与代码产物仍通过 `readWorkspaceFile` 读取，受 200KB 和二进制检测限制；图片与 PDF 通过 `covan-workspace://file/<botId>/<path>` 只读协议加载。主进程必须用 `resolveWorkspaceFile` 校验 Bot 工作区边界后再返回文件流，不向 renderer 暴露任意本机路径。
+- HTML 产物使用 `createWorkspaceHtmlPreview(botId, relPath): Promise<{ id: string; url: string }>` 创建临时 `covan-preview://<随机能力标识>/<path>` 地址，通过 `releaseWorkspaceHtmlPreview(id)` 释放；只有应用主 frame 可调用，能力绑定窗口与当前 Bot 工作区，切换、关闭、主页面导航或窗口销毁时撤销。入口限 HTML/HTM、2MB UTF-8 文本；单资源最大 32MB，所有读取都执行词法与 realpath 边界校验，拒绝目录与符号链接逃逸。
+- HTML iframe 使用 `sandbox="allow-scripts"` 和独立 CSP，允许内嵌/外部 JS、ES modules、CSS、Canvas/WebGL、定时器与鼠标/触控/键盘交互；支持工作区内相对/根相对路径的 JS、CSS、图片、字体与 fetch 数据，以及 HTTP(S) 资源（跨域请求仍遵守 CORS）。点击页面后键盘操作进入预览；标题栏提供重新加载。主界面的 CSP 不开放内嵌脚本。
+- HTML 预览保持 opaque origin，不提供 Node、preload/Covan API、父页面 DOM 或应用私有协议访问；不开放持久存储、Service Worker、嵌套 frame、弹窗、下载、顶层跳转、原生权限或表单外发，导航限制为当前能力地址。协议仅允许 GET/HEAD，CORS 允许 opaque frame 读取当前能力下资源，不返回凭据，资源响应设置 no-store 与 no-referrer。此能力用于静态网页应用，不启动 Node/构建服务，也不改变 HTML 打印禁用脚本的约束。
 
 ### 7.1 文档打印
 

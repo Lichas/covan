@@ -1,5 +1,7 @@
 // shared/types.ts — 主/渲染进程共享类型（SPEC §3 §4 的唯一实现）
 
+export interface WorkspaceHtmlPreview { id: string; url: string }
+
 export type ProviderKind =
   | 'openai'
   | 'anthropic'
@@ -692,6 +694,8 @@ export interface CovanApi {
   openWorkspace(botId: string): Promise<void>
   revealWorkspaceFile(botId: string, relPath: string): Promise<void>
   readWorkspaceFile(botId: string, relPath: string): Promise<string>
+  createWorkspaceHtmlPreview(botId: string, relPath: string): Promise<WorkspaceHtmlPreview>
+  releaseWorkspaceHtmlPreview(id: string): Promise<void>
   printWorkspaceFile(botId: string, relPath: string): Promise<PrintResult>
   pickAndPrintDocument(): Promise<PrintResult>
 

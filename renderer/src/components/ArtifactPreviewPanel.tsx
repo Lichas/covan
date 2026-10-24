@@ -14,9 +14,10 @@ import {
   type ArtifactPreviewKind,
 } from '../lib/workspacePreview'
 import { useUiStore } from '../stores/uiStore'
-import { CloseIcon, FileIcon, FolderIcon, PrinterIcon } from './icons'
+import { CloseIcon, FileIcon, FolderIcon, PrinterIcon, RefreshIcon } from './icons'
 import { MarkdownContent } from './MarkdownContent'
 import { useDocumentPrinting } from '../lib/useDocumentPrinting'
+import { HtmlArtifactPreview } from './HtmlArtifactPreview'
 
 type TextState =
   | { status: 'idle'; content: string; error: string }
@@ -44,7 +45,7 @@ function displayKind(kind: ArtifactPreviewKind) {
 }
 
 function isTextKind(kind: ArtifactPreviewKind) {
-  return kind === 'markdown' || kind === 'html' || kind === 'text' || kind === 'code'
+  return kind === 'markdown' || kind === 'text' || kind === 'code'
 }
 
 const MIN_PREVIEW_WIDTH = 360
@@ -64,6 +65,7 @@ export function ArtifactPreviewPanel() {
   const previewWidth = useUiStore((s) => s.artifactPreviewWidth)
   const setArtifactPreview = useUiStore((s) => s.setArtifactPreview)
   const setArtifactPreviewWidth = useUiStore((s) => s.setArtifactPreviewWidth)
+  const [htmlRevision, setHtmlRevision] = useState(0)
   const [text, setText] = useState<TextState>({
     status: 'idle',
     content: '',
@@ -174,6 +176,14 @@ export function ArtifactPreviewPanel() {
             {displayKind(kind)} · {formatSize(artifact.size)}
           </span>
         </div>
+        {kind === 'html' && <button
+          className="artifact-preview-panel-button"
+          aria-label="重新加载预览"
+          title="重新加载预览"
+          onClick={() => setHtmlRevision((value) => value + 1)}
+        >
+          <RefreshIcon width={17} height={17} />
+        </button>}
         <button
           className="artifact-preview-panel-button"
           disabled={printing.busy || kind === 'unsupported'}
@@ -219,13 +229,8 @@ export function ArtifactPreviewPanel() {
             <MarkdownContent content={text.content} />
           </div>
         )}
-        {text.status === 'ready' && kind === 'html' && (
-          <iframe
-            className="artifact-preview-frame"
-            title={artifact.name}
-            sandbox=""
-            srcDoc={text.content}
-          />
+        {kind === 'html' && (
+          <HtmlArtifactPreview key={`${target.botId}/${artifact.relPath}/${htmlRevision}`} botId={target.botId} relPath={artifact.relPath} />
         )}
         {text.status === 'ready' && kind === 'text' && text.content && (
           <pre className="artifact-preview-text selectable">{text.content}</pre>

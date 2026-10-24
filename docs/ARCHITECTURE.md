@@ -86,7 +86,7 @@ settings  键值表（主题/语言/时区/审核规则等）
 - **新话题边界**：`chat_topics.boundary_message_id` 指向一条 `messages.system_kind='topic_boundary'` 的 UI 分界。完整历史与模型上下文分离：历史分页不变，运行时 SQL 通过 marker 的 SQLite `rowid` 只取边界后消息，并把累计摘要作为只读 system 资料注入。创建流程先完成模型摘要，再用单事务写 topic + marker 并清空群滚动摘要，因而不会留下空摘要边界。
 - **mentions / attachments 以 JSON 字符串列存储**：结构简单、无查询需求，避免额外表。
 - **聊天背景**：`chats.background_image` 只保存 `resources/group-backgrounds` 清单内的文件名。新建群随机写入；旧 group 首次启动时 additive migration 后补齐；dm 默认空值并可由用户在右侧设定页选择。主进程通过 `covan-bg://builtin/<file>` 自定义协议读取随包资源，协议按共享清单校验文件名，不暴露任意本机路径。
-- **产物预览协议**：聊天交付卡的右侧预览面板对文本类文件继续走 `readWorkspaceFile`，对图片和 PDF 使用 `covan-workspace://file/<botId>/<relPath>`。协议处理器只调用 `resolveWorkspaceFile` 后返回文件流和最小 MIME，不提供目录遍历或通用本机路径读取。
+- **产物预览协议**：Markdown/文本/代码走 `readWorkspaceFile`，图片和 PDF 使用 `covan-workspace://file/<botId>/<relPath>`。HTML 由 `workspaceHtmlPreview.ts` 创建绑定窗口和 Bot 的随机能力地址 `covan-preview://<id>/<relPath>`，独立响应 CSP 允许脚本/样式，iframe 仍使用 `sandbox="allow-scripts"`，保持 opaque origin 与无 preload/Node 的边界。资源请求用 `resolveWorkspaceFile` 校验 realpath，提供 JS/CSS/模块/字体等 MIME 和 CORS；HTTP(S) 依赖遵守浏览器跨域规则，应用私有协议不在策略内。能力按预览切换/关闭、主页面导航与窗口销毁撤销；入口和资源大小限制见 SPEC §7。主界面 CSP 仅增加 frame 来源，不开放脚本策略。
 - **引用完整性**：messages 不级联删除——删除 Bot 时只清 bots/memories/chat_members 与外键引用，messages 保留（FR-BOT-04），渲染层对悬空 sender_bot_id 降级为占位头像。
 - **定时任务**：任务外键级联随 Bot 或目标会话删除，避免后台投递到悬空对象。`scheduledTasks.ts` 用 Croner 在进程内恢复未来计划、以任务 ID 锁防止重入；离线错过的单次任务只标记 `missed`。每次执行由 `orchestrator.runScheduledTask()` 创建真实 Bot 消息，模型覆盖只克隆本次运行的 Bot 配置。
 - **settings 键值表**承载所有非结构化配置，避免 schema 膨胀。

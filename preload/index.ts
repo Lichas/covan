@@ -152,6 +152,10 @@ const api: CovanApi = {
     ipcRenderer.invoke(CH.revealWorkspaceFile, botId, relPath),
   readWorkspaceFile: (botId: string, relPath: string) =>
     ipcRenderer.invoke(CH.readWorkspaceFile, botId, relPath),
+  createWorkspaceHtmlPreview: (botId: string, relPath: string) =>
+    ipcRenderer.invoke(CH.createWorkspaceHtmlPreview, botId, relPath),
+  releaseWorkspaceHtmlPreview: (id: string) =>
+    ipcRenderer.invoke(CH.releaseWorkspaceHtmlPreview, id),
   printWorkspaceFile: (botId, relPath) =>
     ipcRenderer.invoke(CH.printWorkspaceFile, botId, relPath),
   pickAndPrintDocument: () => ipcRenderer.invoke(CH.pickAndPrintDocument),
@@ -175,4 +179,4 @@ const api: CovanApi = {
   },
 }
 
-contextBridge.exposeInMainWorld('covan', api)
+if (process.isMainFrame) contextBridge.exposeInMainWorld('covan', api)

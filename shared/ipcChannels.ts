@@ -85,6 +85,8 @@ export const CH = {
   openWorkspace: 'workspace:open',
   revealWorkspaceFile: 'workspace:reveal',
   readWorkspaceFile: 'workspace:read',
+  createWorkspaceHtmlPreview: 'workspace:htmlPreview:create',
+  releaseWorkspaceHtmlPreview: 'workspace:htmlPreview:release',
   printWorkspaceFile: 'printing:workspace',
   pickAndPrintDocument: 'printing:pick',
 

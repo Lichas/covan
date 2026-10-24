@@ -28,6 +28,7 @@ import { seedBuiltinFitnessSkill } from './extensions/skills'
 import { repairWelcomeNames } from './welcome'
 import { closeMcpSessions, configureMcpFetch } from './extensions/mcp'
 import { initResponseDecisionEngine } from './decisionStrategy'
+import { registerWorkspaceHtmlPreview } from './workspaceHtmlPreview'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const configuredUserData = process.env.COVAN_USER_DATA_DIR
@@ -44,6 +45,10 @@ function prepareUserDataDir(userData: string): void {
 // 自定义头像协议：covan-avatar://local/avatars/<逐段编码的文件路径>
 // 必须在 app ready 之前注册特权
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'covan-preview',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
+  },
   {
     scheme: 'covan-print',
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
@@ -292,6 +297,7 @@ void app.whenReady().then(async () => {
   const userData = app.getPath('userData')
   prepareUserDataDir(userData)
   registerImageProtocols(userData)
+  registerWorkspaceHtmlPreview()
   initDb(userData)
   repairWelcomeNames()
   startMemorySummaries()

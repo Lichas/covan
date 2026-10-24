@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>预览游戏回归</title>
+  <link rel="stylesheet" href="assets/game.css">
+  <style>body { margin: 20px; } canvas { border: 1px solid #789; }</style>
+</head>
+<body>
+  <h1>预览游戏回归</h1>
+  <canvas width="220" height="240" aria-label="游戏画布"></canvas>
+  <p>移动次数：<output id="moves">0</output></p>
+  <button id="move">向右移动</button>
+  <button onclick="document.querySelector('#inline').textContent='clicked'">内嵌事件</button>
+  <output id="inline">waiting</output>
+  <p id="data">waiting</p><p id="module">waiting</p><p id="remote">waiting</p>
+  <img src="assets/tile.svg" width="32" height="32" alt="本地方块">
+  <button id="probe">检查隔离</button><pre id="isolation"></pre>
+  <button id="leave">离开预览</button>
+  <script>
+    const params = new URLSearchParams(location.search);
+    document.querySelector('#leave').onclick = () => { location.href = 'covan-workspace://file/invalid/escape.html'; };
+    document.querySelector('#probe').onclick = async () => {
+      const result = { bridge: typeof window.covan, node: typeof require, process: typeof process };
+      try { void parent.document.body; result.parent = 'accessible'; } catch { result.parent = 'blocked'; }
+      try { localStorage.setItem('test', '1'); result.storage = 'accessible'; } catch { result.storage = 'blocked'; }
+      result.popup = window.open('about:blank') === null ? 'blocked' : 'opened';
+      for (const [name, url] of Object.entries({ symlink: 'assets/escape.txt', directory: 'assets/', traversal: '/%2e%2e%2foutside.txt', otherPreview: 'covan-preview://invalid/assets/game.css', privateProtocol: 'covan-avatar://local/avatars/private.png', file: params.get('outside') })) {
+        if (!url) continue;
+        try { result[name] = (await fetch(url)).status; } catch { result[name] = 'blocked'; }
+      }
+      document.querySelector('#isolation').textContent = JSON.stringify(result);
+    };
+    // Inline scripts, animation and Canvas must work independently of assets.
+    const canvas = document.querySelector('canvas'), ctx = canvas.getContext('2d');
+    let moves = 0;
+    const draw = () => { ctx.clearRect(0, 0, 220, 240); ctx.fillStyle = '#ff9900'; ctx.fillRect(10 + moves * 20, 10, 30, 30); };
+    const move = () => { moves++; document.querySelector('#moves').textContent = String(moves); draw(); };
+    document.querySelector('#move').addEventListener('click', move);
+    document.addEventListener('keydown', event => { if (event.key === 'ArrowRight') { event.preventDefault(); move(); } });
+    draw();
+    requestAnimationFrame(() => { document.body.dataset.animated = 'yes'; });
+    fetch('./assets/data.json').then(response => response.json()).then(data => { document.querySelector('#data').textContent = data.label; });
+  </script>
+  <script type="module" src="assets/game.mjs"></script>
+</body>
+</html>
