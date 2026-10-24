@@ -544,8 +544,8 @@ export function ExtensionsPanel({
                     {value === 'mcp' ? 'MCP' : 'Skills'}{' '}
                     <span className="ml-1 text-stone-400">
                       {value === 'mcp'
-                        ? catalog.servers.length
-                        : catalog.skills.length}
+                        ? botId ? config.mcpServerIds.length : catalog.servers.length
+                        : botId ? config.skillIds.length : catalog.skills.length}
                     </span>
                   </button>
                 ))}
@@ -577,6 +577,7 @@ export function ExtensionsPanel({
             <p className="text-xs text-stone-500">
               已装配 {config.mcpServerIds.length} 个 MCP ·{' '}
               {config.skillIds.length} 个 Skills
+              {activeTab === 'skills' && '；下方为全局安装库，仅已装配的 Skill 对当前 Bot 生效。'}
             </p>
           )}
           {loading ? (
@@ -743,7 +744,8 @@ export function ExtensionsPanel({
                             </p>
                             <div className="mt-1 text-[11px] text-stone-400">
                               {skill.file_count} 个文件
-                              {!skill.enabled ? ' · 已停用' : ''}
+                              {botId ? selected ? ' · 已装配' : ' · 未装配' : ''}
+                              {!skill.enabled ? ' · 全局已停用' : ''}
                             </div>
                           </div>
                           <Toggle

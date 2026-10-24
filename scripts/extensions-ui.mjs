@@ -202,6 +202,40 @@ try {
     default_model: 'fixture',
     api_key: '',
   })
+  const fitnessSkill = (await api('listExtensions')).skills.find((skill) => skill.name === 'fitness-coach')
+  assert.ok(fitnessSkill, 'built-in fitness Skill is installed globally')
+  const createFromTemplateUi = async (name, template, expectedSkills) => {
+    await page.keyboard.press('Meta+1')
+    const createDialog = page.getByRole('dialog', { name: '新建 Bot' })
+    await expect(createDialog).toBeVisible()
+    await expect(createDialog.getByLabel('人设模板')).toBeEnabled()
+    await createDialog.getByLabel('人设模板').selectOption('fitness-coach')
+    await expect(createDialog.getByLabel('模板默认 Skills')).toContainText('fitness-coach')
+    await createDialog.getByLabel('人设模板').selectOption(template)
+    await expect(createDialog.getByLabel('模板默认 Skills')).toContainText(expectedSkills.length ? 'fitness-coach' : '无')
+    await createDialog.getByLabel('名称', { exact: true }).fill(name)
+    await createDialog.getByRole('button', { name: '创建并开始聊天' }).click()
+    await expect(createDialog).toHaveCount(0)
+    const created = (await api('listBots')).find((bot) => bot.name === name)
+    assert.ok(created)
+    assert.deepEqual((await api('getBotExtensions', created.id)).skillIds, expectedSkills)
+    return created
+  }
+  const templateCoach = await createFromTemplateUi('模板教练回归', 'fitness-coach', [fitnessSkill.id])
+  const templateDeveloper = await createFromTemplateUi('模板开发回归', 'fullstack', [])
+  const templateBlank = await createFromTemplateUi('模板空白回归', 'blank', [])
+  await api('setBotExtensions', templateCoach.id, { mcpServerIds: [], skillIds: [] })
+  await api('updateBot', templateCoach.id, { tags: '健身,健康' })
+  assert.deepEqual((await api('getBotExtensions', templateCoach.id)).skillIds, [])
+  await api('updateBot', templateDeveloper.id, { tags: '健身' })
+  assert.deepEqual((await api('getBotExtensions', templateDeveloper.id)).skillIds, [])
+  await app.close()
+  await launch()
+  for (const bot of [templateCoach, templateDeveloper, templateBlank]) {
+    assert.deepEqual((await api('getBotExtensions', bot.id)).skillIds, [])
+    await api('deleteBot', bot.id)
+  }
+  console.log('✓ Role template defaults, template switching, tag edits and manual removal across restart')
   const a = await api('createBot', {
     name: '研究助手',
     provider_id: provider.id,
@@ -279,7 +313,8 @@ try {
   await global.getByLabel('Skill 目录', { exact: true }).fill(skillDir)
   await global.getByRole('button', { name: '安装', exact: true }).click()
   await expect(global.getByRole('status')).toContainText('已安装 1 个 Skills')
-  const skill = (await api('listExtensions')).skills[0]
+  const skill = (await api('listExtensions')).skills.find((item) => item.name === 'writing-workflow')
+  assert.ok(skill)
   await global.getByRole('button', { name: `查看 ${skill.name}` }).click()
   await expect(
     global.getByRole('heading', { name: '写作工作流' }),
@@ -296,6 +331,10 @@ try {
   const panel = page.getByRole('complementary', { name: 'Bot 设定' })
   await panel.getByRole('button', { name: '扩展', exact: true }).click()
   const botPanel = page.getByTestId('bot-extensions')
+  await botPanel.getByRole('tab', { name: /Skills/ }).click()
+  await expect(botPanel.getByRole('switch', { name: '装配 fitness-coach', exact: true })).toHaveAttribute('aria-checked', 'false')
+  await expect(botPanel.getByTestId('skill-row').filter({ hasText: 'fitness-coach' })).toContainText('未装配')
+  await botPanel.getByRole('tab', { name: /MCP/ }).click()
   await botPanel.getByRole('switch', { name: '装配 本地工具集' }).click()
   await expect(
     botPanel.getByRole('switch', { name: '装配 本地工具集' }),
@@ -324,11 +363,10 @@ try {
     '✓ Skill installation/preview, per-Bot assignment and compact layout',
   )
 
-  const managedSkillDir = path.join(
-    profile,
-    'skills',
-    fs.readdirSync(path.join(profile, 'skills'))[0],
-  )
+  const managedSkillDir = fs.readdirSync(path.join(profile, 'skills'))
+    .map((directory) => path.join(profile, 'skills', directory))
+    .find((directory) => fs.existsSync(path.join(directory, 'scripts', 'hello.sh')))
+  assert.ok(managedSkillDir)
   const reply = await send(dm.id, [
     { name: 'skill_read', args: { skillId: skill.id } },
     {

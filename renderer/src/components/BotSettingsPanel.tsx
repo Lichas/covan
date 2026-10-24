@@ -21,6 +21,7 @@ import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import { ScheduledTasksPanel } from './ScheduledTasksPanel'
 import { ExtensionsPanel } from './ExtensionsPanel'
+import { HealthPanel } from './HealthPanel'
 import { CliAccessSegmented, isCliBackend } from './LocalCliFields'
 import { ModelPicker, describeBotModel } from './ModelPicker'
 import { api } from '../lib/api'
@@ -29,7 +30,14 @@ import { ChevronRightIcon, CloseIcon, PencilIcon } from './icons'
 import { avatarSrc } from '../lib/format'
 import { GROUP_BACKGROUNDS, groupBackgroundUrl } from '../lib/groupBackground'
 
-type Tab = 'lifestyle' | 'settings' | 'memory' | 'workspace' | 'scheduled' | 'extensions'
+type Tab = 'lifestyle' | 'settings' | 'fitness' | 'memory' | 'workspace' | 'scheduled' | 'extensions'
+
+function isFitnessBot(bot: Bot): boolean {
+  return bot.tags
+    .split(/[,，]/)
+    .map((tag) => tag.trim())
+    .some((tag) => tag === '健身' || tag === '健康' || tag === '薄肌')
+}
 
 type MarkdownToken = { text: string; className?: string }
 
@@ -957,6 +965,7 @@ export function BotSettingsPanel({
   const tabs: { id: Tab; label: string; icon: LucideIcon }[] = [
     { id: 'lifestyle', label: '生活照', icon: Images },
     { id: 'settings', label: '设定', icon: SlidersHorizontal },
+    ...(isFitnessBot(bot) ? [{ id: 'fitness' as const, label: '健康', icon: HeartPulse }] : []),
     { id: 'memory', label: '记忆', icon: Brain },
     { id: 'workspace', label: '工作区', icon: FolderOpen },
     { id: 'scheduled', label: '定时', icon: Clock3 },
@@ -1063,6 +1072,7 @@ export function BotSettingsPanel({
             onEditAvatar={() => setAvatarOpen(true)}
           />
         )}
+        {activeTab === 'fitness' && <HealthPanel key={bot.id} botId={bot.id} />}
         {activeTab === 'memory' && <MemoryPanel botId={bot.id} sceneId={chat.id} />}
         {activeTab === 'workspace' && <WorkspacePanel botId={bot.id} />}
         {activeTab === 'scheduled' && <ScheduledTasksPanel bot={bot} chat={chat} />}

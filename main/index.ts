@@ -24,6 +24,7 @@ import {
 import { isGroupBackground } from '../shared/groupBackgrounds'
 import { startScheduledTasks, stopScheduledTasks } from './scheduledTasks'
 import { initExtensions } from './extensions/store'
+import { seedBuiltinFitnessSkill } from './extensions/skills'
 import { closeMcpSessions, configureMcpFetch } from './extensions/mcp'
 import { initResponseDecisionEngine } from './decisionStrategy'
 
@@ -286,7 +287,7 @@ function createWindow(): void {
   }
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   const userData = app.getPath('userData')
   prepareUserDataDir(userData)
   registerImageProtocols(userData)
@@ -318,6 +319,15 @@ void app.whenReady().then(() => {
     },
     unseal: (value) => safeStorage.decryptString(Buffer.from(value, 'base64')),
   })
+  try {
+    await seedBuiltinFitnessSkill(
+      app.isPackaged
+        ? path.join(process.resourcesPath, 'skills')
+        : path.join(app.getAppPath(), 'resources', 'skills'),
+    )
+  } catch (error) {
+    console.warn('内置健身 Skill 安装失败：', error)
+  }
   configureMcpFetch((input, init) => net.fetch(input instanceof URL ? input.href : input, { ...init, bypassCustomProtocolHandlers: true }))
   // A previous process may have exited during generation.
   // Recovery never resumes a network request automatically.

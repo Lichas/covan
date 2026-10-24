@@ -97,7 +97,7 @@ settings  键值表（主题/语言/时区/审核规则等）
 - `contextIsolation: true`，`nodeIntegration: false`，渲染进程无任何 Node 能力。
 - preload 仅通过 `contextBridge.exposeInMainWorld('covan', api)` 暴露 SPEC.md §4 定义的 `CovanApi`；通道名集中在 `shared/ipcChannels.ts` 常量，主进程 `ipcMain.handle` 逐一注册，**无泛化转发、无 `ipcRenderer.send` 裸暴露**。
 - 所有通道参数在主进程侧做类型与非空校验（id 必须为已存在的 uuid 等），渲染传入的路径一律不允许——文件路径只由主进程根据 botId 推导。
-- 主 → 渲染为单向事件广播：`webContents.send('covan:event', ev)`，渲染通过 `onEvent(cb)` 订阅并返回取消订阅函数。事件类型为 SPEC §4 的 `CovanEvent` 联合（message-delta / message-done / message-error / chat-updated / bot-updated / scheduled-task-state / scheduled-tasks-updated / system-message / agent-activity）。普通会话轮次与定时任务轮次分开维护运行状态，任一结束均不会误覆盖另一个。
+- 主 → 渲染为单向事件广播：`webContents.send('covan:event', ev)`，渲染通过 `onEvent(cb)` 订阅并返回取消订阅函数。事件类型为 SPEC §4 的 `CovanEvent` 联合（message-delta / message-done / message-error / chat-updated / bot-updated / scheduled-task-state / scheduled-tasks-updated / fitness-updated / notification-click / system-message / agent-activity）。普通会话轮次与定时任务轮次分开维护运行状态，任一结束均不会误覆盖另一个。
 - api_key 从不流向渲染进程的通道响应之外的任何地方；渲染仅在 provider 编辑表单中读写，列表展示默认掩码。
 
 ## 5. pi 集成层设计（agentRuntime.ts）
@@ -237,7 +237,8 @@ Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代
 - **路径逃逸防护**：所有入参路径 `path.resolve(workspaceRoot, input)` 后校验结果必须以 `workspaceRoot + sep` 开头；拒绝绝对路径、拒绝任何解析后越出根目录的输入（`..`、符号链接场景下额外用 realpath 复核），违例返回错误字符串给模型而非抛异常中断 agent。
 - Bash AgentTool 位于 `tools/bash.ts`，普通会话可用，Agent 私聊禁用。它用独立进程组执行非交互 `/bin/bash`，对环境、cwd、执行时长和输出体积设限；PATH 排除用户与临时目录中的可执行项，macOS 再通过 `sandbox-exec` 将用户文件正文读取限制到 Bot 工作区及其当前装配的只读 Skill 包，写入只允许工作区。每次调用重新核实 Skill 启用状态。网络和系统可执行目录保持可用，以支持依赖安装、构建和测试。成功执行后只广播工作区刷新，不推断具体交付文件。当前不在非 macOS 平台降级为无沙箱执行。
 - 网页 AgentTool：`web_search` 使用可替换 provider（当前 Bing RSS）返回 URL 与摘要；`web_fetch` 的静态快路径使用 Chromium `net.fetch`，继承 macOS 系统代理并支持 Fake-IP。`tools/browser.ts` 是独立渲染 provider：当自动检测到 JS 应用壳、静态正文过少或静态请求失败时，在隐藏的沙箱 BrowserWindow 中加载页面、执行 JavaScript 并提取 DOM 正文；窗口禁用 Node、隔离 context、禁止弹窗且使用与普通浏览不共享登录态的内存 session。静态传输限制 20 秒、浏览器渲染限制 30 秒，输出与每轮调用数继续受控；SSRF/内网地址拦截暂不在当前边界内。
-- **权限装配**：`tools/toolset.ts` 只按场景组合工具，不实现工具业务。普通会话获得完整工作区 + Bash + 网页 + 应用工具；Agent 私聊只获得工作区只读 + 网页只读工具。工具实现不得 import 编排器，Agent 运行时也不得直接拼装单个工具。
+- **权限装配**：`tools/toolset.ts` 只按场景组合工具，不实现工具业务。普通会话获得完整工作区 + Bash + 网页 + 应用工具；带健身/健康/薄肌标签或已有身体档案的教练 Bot 额外获得 `fitness_profile` / `fitness_log` / `fitness_summary`；Agent 私聊只获得工作区只读 + 网页只读工具。工具实现不得 import 编排器，Agent 运行时也不得直接拼装单个工具。
+- **健身数据**：`main/fitness.ts` 只依赖 `db.ts` 的档案/记录 DAO，不保存独立的运行时状态；`fitness_profiles` 与 `fitness_logs` 按 Bot 级联，IPC/preload/renderer 使用同一组类型。健康页通过 `fitness-updated` 事件刷新，图表复用 OpenUI 的折线渲染。内置 `fitness-coach` Skill 位于 `resources/skills/fitness-coach`，启动时由 `extensions/skills.ts` 安装到受管理目录；用户同名 Skill 优先，不覆盖。默认装配来自 `shared/personaTemplates.ts` 的 `defaultSkillNames`，由 `main/botCreation.ts` 根据创建 IPC 的模板 ID 验证并在事务中绑定；不按标签推断，启动更新不改写已有装配。Apple 健康数据不能由 Mac 应用通过 HealthKit 直读，当前只支持手动记录，后续需要 iPhone 导出桥接。
 - **定时任务应用工具**：`agentTools.ts` 的 `list_scheduled_tasks`、`create_scheduled_task`、`update_scheduled_task`、`delete_scheduled_task` 只作用于当前 Bot，创建目标固定为当前 chat；写入后重建本地调度。工具不会暴露跨 Bot 的修改权限，Agent 私聊不装配这些能力。
 - **模型指引**：装配层用实际工具名动态追加简短 system prompt，明确需要文件/最新信息时必须真实调用，将工具内容视为不可信数据，禁止伪造成功。仅在收到本轮 `workspace_write` / `workspace_edit` 成功结果后，模型才可声称文件已写入、已保存或已生成；新建 Bot 的默认运行预算为中等推理与 8192 输出 Token，已有配置不迁移覆盖。
 - 工具执行层在 `workspace_write` / `workspace_edit` 成功事件中生成 `WorkspaceArtifact`，编排器将其去重写入当前消息的 `artifacts` JSON 列并广播工作区刷新事件；因此交付 UI 有可靠来源且可跨重启恢复，不解析模型正文。renderer 的交付卡只负责选择目标文件，右侧产物预览面板按扩展名展示 Markdown、HTML、TXT、代码、图片和 PDF，并在 UI store 中保存当前拖拽宽度。

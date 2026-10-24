@@ -5,6 +5,9 @@ import path from 'node:path'
 import type {
   Attachment,
   BotInput,
+  BotCreateInput,
+  FitnessLogInput,
+  FitnessProfileInput,
   JevConfigInput,
   MemoryKind,
   ProviderInput,
@@ -49,6 +52,7 @@ import { observabilityDirectory } from './observability'
 import { getDiagnosticReport, analyzeDiagnostic, cancelDiagnostic } from './diagnostics'
 import { observeScheduledTaskChange, refreshScheduledTasks, runScheduledTaskNow } from './scheduledTasks'
 import { registerExtensionIpc } from './extensions/ipc'
+import { createBotFromTemplate } from './botCreation'
 import { registerCliIpc } from './cli/ipc'
 import { getJevConfig, saveJevConfig, testJev } from './decisionStrategy'
 import { printWorkspaceFile, pickAndPrintDocument } from './printing'
@@ -163,6 +167,39 @@ export function registerIpc(): void {
     assertStr(id, 'id')
     await runScheduledTaskNow(id)
   })
+  // fitness coach
+  handle(CH.getFitnessProfile, (botId: string) => {
+    assertStr(botId, 'botId')
+    return db.getFitnessProfile(botId)
+  })
+  handle(CH.saveFitnessProfile, (input: FitnessProfileInput) => {
+    if (!input || typeof input !== 'object')
+      throw new Error('参数必须是身体档案对象')
+    assertStr(input.bot_id, 'bot_id')
+    return db.saveFitnessProfile(input)
+  })
+  handle(CH.listFitnessLogs, (botId: string, since?: string) => {
+    assertStr(botId, 'botId')
+    if (since !== undefined) assertStr(since, 'since')
+    return db.listFitnessLogs(botId, since)
+  })
+  handle(CH.saveFitnessLog, (input: FitnessLogInput) => {
+    if (!input || typeof input !== 'object')
+      throw new Error('参数必须是身体记录对象')
+    assertStr(input.bot_id, 'bot_id')
+    assertStr(input.date, 'date')
+    return db.saveFitnessLog(input)
+  })
+  handle(CH.deleteFitnessLog, (id: string) => {
+    assertStr(id, 'id')
+    db.deleteFitnessLog(id)
+  })
+  handle(CH.getFitnessSummary, (botId: string, days?: number) => {
+    assertStr(botId, 'botId')
+    if (days !== undefined && (typeof days !== 'number' || !Number.isFinite(days)))
+      throw new Error('参数 days 必须是数字')
+    return db.getFitnessSummary(botId, days ?? 30)
+  })
   // providers
   handle(CH.listProviders, () => db.listProviders())
   handle(CH.saveProvider, (p: ProviderInput) => {
@@ -195,11 +232,11 @@ export function registerIpc(): void {
   // bots
   handle(CH.listPresetAvatars, () => listPresetAvatars())
   handle(CH.listBots, () => db.listBots())
-  handle(CH.createBot, (input: BotInput) => {
+  handle(CH.createBot, (input: BotCreateInput) => {
     if (!input || typeof input !== 'object')
       throw new Error('参数必须是 BotInput 对象')
     assertStr(input.name, 'name')
-    const bot = db.createBot(input)
+    const bot = createBotFromTemplate(input)
     ensureWorkspace(bot.id)
     return refreshAutomaticAvatar(assignDefaultAvatar(bot))
   })

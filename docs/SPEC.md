@@ -177,6 +177,40 @@ CREATE TABLE scheduled_tasks (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE fitness_profiles (
+  bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
+  age INTEGER,
+  sex TEXT NOT NULL DEFAULT '', -- ''|female|male|other
+  height_cm REAL,
+  weight_kg REAL,
+  body_fat_pct REAL,
+  waist_cm REAL,
+  goal TEXT NOT NULL DEFAULT '',
+  target_weight_kg REAL,
+  target_date TEXT NOT NULL DEFAULT '', -- YYYY-MM-DD
+  experience TEXT NOT NULL DEFAULT '',
+  injuries TEXT NOT NULL DEFAULT '',
+  equipment TEXT NOT NULL DEFAULT '',
+  plan TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE fitness_logs (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  date TEXT NOT NULL, -- 本地 YYYY-MM-DD，同一 Bot 每天一条
+  weight_kg REAL,
+  waist_cm REAL,
+  body_fat_pct REAL,
+  sleep_hours REAL,
+  steps INTEGER,
+  workout TEXT NOT NULL DEFAULT '',
+  protein_g REAL,
+  calories REAL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  UNIQUE(bot_id, date)
+);
 ```
 
 ## 4. IPC 接口契约（preload 暴露 `window.covan`）
@@ -205,6 +239,14 @@ interface CovanApi {
   saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>;
   deleteScheduledTask(id: string): Promise<void>;
   runScheduledTask(id: string): Promise<void>;
+
+  // fitness coach
+  getFitnessProfile(botId: string): Promise<FitnessProfile>;
+  saveFitnessProfile(input: FitnessProfileInput): Promise<FitnessProfile>;
+  listFitnessLogs(botId: string, since?: string): Promise<FitnessLog[]>;
+  saveFitnessLog(input: FitnessLogInput): Promise<FitnessLog>;
+  deleteFitnessLog(id: string): Promise<void>;
+  getFitnessSummary(botId: string, days?: number): Promise<FitnessSummary>;
 
   // providers
   listProviders(): Promise<Provider[]>;
@@ -284,6 +326,7 @@ type CovanEvent =
   | { type: 'chat-updated'; chatId: string }
   | { type: 'bot-updated'; botId: string }
   | { type: 'scheduled-tasks-updated'; taskId?: string }
+  | { type: 'fitness-updated'; botId: string }
   | { type: 'system-message'; chatId: string; message: Message };
 ```
 
@@ -403,7 +446,7 @@ type CovanEvent =
 
 ### 6.5 MCP 与 Skills 扩展
 
-- 设置 → MCP / Skills 分别作为一级全局安装库，提供 MCP 服务的新增/编辑/停用/删除/测试及工具清单。新增 MCP 支持粘贴 mcpServers JSON、单个服务 JSON、单条带引号的启动命令或 HTTP/HTTPS URL，解析并填入后供用户检查；多服务配置必须选择其中一个，本次仅安装该服务。解析不保存、不启动进程、不测试连接，显式点击安装后才保存。启动命令按 argv 解析，不经 shell，拒绝管道、命令链、命令替换与未闭合引号；无效 JSON/参数类型就地提示。参数、工作目录、环境变量与请求头默认折叠到高级配置，编辑已保存服务时展开；原有凭据省略保留约定不变。安装库空状态说明用途与导入方式，Skills 的本地目录或 HTTPS Git 仓库导入、预览、停用与卸载。Bot 右栏 → 扩展独立装配；新 Bot 默认无扩展，安装不自动授权给所有 Bot。
+- 设置 → MCP / Skills 分别作为一级全局安装库，提供 MCP 服务的新增/编辑/停用/删除/测试及工具清单。新增 MCP 支持粘贴 mcpServers JSON、单个服务 JSON、单条带引号的启动命令或 HTTP/HTTPS URL，解析并填入后供用户检查；多服务配置必须选择其中一个，本次仅安装该服务。解析不保存、不启动进程、不测试连接，显式点击安装后才保存。启动命令按 argv 解析，不经 shell，拒绝管道、命令链、命令替换与未闭合引号；无效 JSON/参数类型就地提示。参数、工作目录、环境变量与请求头默认折叠到高级配置，编辑已保存服务时展开；原有凭据省略保留约定不变。安装库空状态说明用途与导入方式，Skills 的本地目录或 HTTPS Git 仓库导入、预览、停用与卸载。Bot 右栏 → 扩展独立装配；仅创建时应用所选角色模板声明的默认 Skills，未声明的模板与未指定模板的新 Bot 均无扩展。全局安装不自动授权给任何 Bot，扩展页标明已装配/未装配，Bot 页签数量表示当前装配数。
 - MCP 使用官方 TypeScript SDK，支持 stdio、Streamable HTTP 和显式 SSE。stdio 由主进程直接启动 command/args（不经 shell），仅继承 SDK 默认环境和显式配置的 env；远程 URL 不接受用户信息、查询参数和 fragment，凭据通过 headers 配置。env/headers 使用 Electron safeStorage 加密存储，系统加密不可用时拒绝保存非空凭据；列表只返回键名，编辑省略保留、传空对象清除。Provider 原有密钥存储方式不变。
 - 每轮为已装配且全局启用的服务建立独立连接，连接/发现各 15 秒、工具调用 60 秒超时，支持停止取消并在结束时关闭连接/子进程。工具名带服务 ID 命名空间；发现最多 128 个工具/服务，单 Bot 最多装配 8 个服务。失败服务以简洁状态加入当前轮上下文，其余能力继续使用。MCP 服务只获知当前 Bot 工作区 root；不提供采样、自动确认或递归调用宿主能力。
 - Skills 遵循 Agent Skills 的 YAML frontmatter + Markdown 格式，必须有合法 name/description；安装复制 SKILL.md 及 scripts/references/assets 到应用管理目录，拒绝符号链接与目录逃逸，不自动执行安装脚本。支持一次导入目录中的多个技能，同名重新导入更新并保留 Bot 绑定。每技能最多 1000 文件、单文件 10MB、总 50MB；SKILL.md 与按需读取的文本最多 200KB，拒绝二进制读取。Git 导入限 HTTPS、浅克隆、不启用仓库 hooks/子模块，支持相对子目录；不自动安装系统依赖。
@@ -511,7 +554,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 字体和按钮：普通界面、正文和表单统一使用 `-apple-system, BlinkMacSystemFont, system-ui, sans-serif`，macOS 由系统选用默认西文及中文字体；代码、代码文件与公式保留其语义字体。普通按钮统一胶囊圆角，等宽高的图标按钮呈圆形；该规则同样覆盖弹窗、选择控件按钮与挂载到 body 的上下文菜单。聊天背景预览、图库选图与设置中的主题预览按钮例外，作为卡片使用 14px 圆角矩形；不改变输入框或内容面板的形状。
 - ChatView：顶部显示当前 Bot/群名与右栏入口，单聊会话操作放在 Bot 右栏，群聊工具栏保留完整会话导出和齿轮；群聊齿轮打开回复机制和聊天背景设置。会话可使用 `resources/group-backgrounds` 内置图片作为聊天背景，新建群随机分配一张，旧群首次启动补齐一张；私聊默认无背景，可在 Bot 设定页手动选择、随机或清除。图片背景不得改变用户消息的默认气泡配色、阴影与模糊：单聊继续使用不透明深色底和浅色文字（对比度至少 4.5:1），群聊保留原有玻璃气泡，浅色/深色主题均适用。renderer 只能经 `covan-bg://builtin/<file>` 读取清单内文件。私聊 Bot 在准备回复、流式回复或执行工具时，顶部头像显示一圈旋转的 Siri 风格渐变状态环，并遵守减少动效偏好；Agent 私聊记录中实际回复中的 Bot 头像同样显示该状态。消息显示作者、时间、跨日分隔；支持 Markdown（含行内/块级 LaTeX 公式）、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持在右侧可调整宽度的产物预览窗预览 Markdown、HTML、TXT、代码、图片和 PDF，并支持定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
 - 单聊聊天顶部居中显示小头像和名称胶囊按钮，点击切换 Bot 右栏，支持键盘激活和 ⌘./Ctrl+.，用 `aria-expanded` 表达开合状态；头像保留生成状态环。单聊顶部不再显示模型副标题或会话操作图标。群聊顶部与单聊同构：居中的身份卡片 = 左栏会话列表同款群头像（成员头像叠放 + 人数角标）+ 群名，形状为 12px 圆角矩形而不是胶囊，成员数与「共享上下文」说明放在 `title`/无障碍名称里；邀请成员、开始新话题、下载、群聊设置四个图标按钮固定在顶部右侧，与身份卡片互不遮挡。群聊设置面板头部也用同一个群头像，头像在三处（左栏、聊天顶部、设置面板）保持一致。头像名称按钮（含群聊身份卡片）仅在右栏展开时显示蓝色边框，未选中时悬停和键盘聚焦均不显示蓝框（键盘焦点使用中性描边）。单聊与群聊聊天顶部共用覆盖于消息之上的透明渐变毛玻璃层：色泽与模糊一起向下渐隐为全透明，无均匀矩形底色、横线或阴影边界；滚动消息可从顶部层后方通过，头像/名称/操作按钮保持清晰，首条消息与定位目标预留顶部空间。背景照片、浅色和深色模式均使用该效果；减少透明度偏好时移除模糊但保留渐隐轮廓。右栏头像区域保留半透明毛玻璃且无底部横线；左右栏竖分割线使用低对比中性灰，深色主题使用相应的浅灰透明度。建群（保留当前单聊并邀请其他 Bot）、开始新话题（保留历史并压缩上下文）、下载 Markdown 会话三项操作按此顺序在右栏大头像右侧纵向排列；右栏有独立关闭按钮。操作沿用原来的确认、禁用条件和错误反馈，群聊仍使用原顶部工具栏。
-- BotSettingsPanel（右栏，单聊选中时显示）：居中大尺寸头像、只读名称与描述；生活照、设定、记忆、工作区、定时、扩展六个标签页（按从左到右排列）。设定页是行式资料页而不是一屏表单：每行「标签 + 一行摘要 + 右侧操作」——外观、名称与职责、人设指令、默认模型、文件权限（仅本地 CLI，行内分段控件：只读 / 可写）、判断用 Provider（仅本地 CLI）、在哪工作、通知、标签，然后是「生成参数」分段：推理强度（五档分段控件）、响应决策（自动 / LLM / Jev 分段控件 + 当前策略一行说明）、最大输出 Token、Temperature。名称、职责、人设与标签点「编辑」就地展开、完成后写回，取消恢复进入编辑前内容，编辑中的草稿不会因外部 Bot 更新覆盖；折叠态人设摘要取 Markdown 首句纯文本。人设编辑区至少 360px 高，使用等宽透明输入层叠加 Markdown 语法高亮层，支持标题、代码围栏、行内代码、强调、链接和注释高亮。「默认模型」行摘要写明来源与模型名，展开后是模型选择器，选中即时保存；「在哪工作」显示工作区路径并跳到工作区标签页。单聊的设定页保留当前会话的聊天背景选择器，默认以当前背景预览卡和「更换」入口紧凑呈现，展开后显示图库；这只更新当前 dm 会话，不写入 Bot 人设。头部名称只读，重命名走「名称与职责」行。
+- BotSettingsPanel（右栏，单聊选中时显示）：居中大尺寸头像、只读名称与描述；生活照、设定、健康（仅带健身/健康/薄肌标签时）、记忆、工作区、定时、扩展标签页（按从左到右排列）。设定页是行式资料页而不是一屏表单：每行「标签 + 一行摘要 + 右侧操作」——外观、名称与职责、人设指令、默认模型、文件权限（仅本地 CLI，行内分段控件：只读 / 可写）、判断用 Provider（仅本地 CLI）、在哪工作、通知、标签，然后是「生成参数」分段：推理强度（五档分段控件）、响应决策（自动 / LLM / Jev 分段控件 + 当前策略一行说明）、最大输出 Token、Temperature。名称、职责、人设与标签点「编辑」就地展开、完成后写回，取消恢复进入编辑前内容，编辑中的草稿不会因外部 Bot 更新覆盖；折叠态人设摘要取 Markdown 首句纯文本。人设编辑区至少 360px 高，使用等宽透明输入层叠加 Markdown 语法高亮层，支持标题、代码围栏、行内代码、强调、链接和注释高亮。「默认模型」行摘要写明来源与模型名，展开后是模型选择器，选中即时保存；「在哪工作」显示工作区路径并跳到工作区标签页。单聊的设定页保留当前会话的聊天背景选择器，默认以当前背景预览卡和「更换」入口紧凑呈现，展开后显示图库；这只更新当前 dm 会话，不写入 Bot 人设。头部名称只读，重命名走「名称与职责」行。
 - SettingsModal（通用）：采用左侧分类导航、右侧内容区的设置布局；各分类页直接展示设置内容，不再渲染重复的分类标题、说明或其横向分隔区域，当前分类通过导航选中态与内容区可访问名称表达。主题选择使用三张 14px 圆角矩形预览卡，保留选中描边与即时切换行为。分类包括通用、Provider、Bot、定时任务、头像生成、MCP、Skills、Debug，MCP、Skills 与 Debug 为同级一级分类。通用包含账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自然追问开关、自动审核开关 + 规则文本、TypeSafe API Key / Jev 模型 / 置信度阈值）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。Provider 列表、配置表单、Bot 的 Provider 选择使用对应厂商的图形标识，不使用字母或文字缩写；OpenAI-compatible 与 Mock 使用中性图形。
 - 新建 Bot 对话框：先展示名称、人设与运行方式/模型，底部独立操作栏固定可见，名称未填或偏好仍在加载时显示简短原因，满足创建条件后不显示常驻说明；外观、描述、CLI 路径、判断用 Provider 和文件权限收进默认折叠的「外观与高级设置」，原字段与保存契约不变。名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、虚拟男友「小帅哥」、空白自定义）/描述，「运行方式与默认模型」复用模型选择器；本地 CLI 时额外显示判断用 Provider 下拉与文件权限分段控件。
 - 中文 UI。
@@ -519,10 +562,13 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 信息密度：输入区空闲或编辑草稿时不展示常驻底部说明，Markdown/图片能力与发送快捷键移到输入框和按钮 tooltip；图片导入与生成时显示简短状态，错误仍立即可见，草稿保存与中文输入法行为不变。Bot 资料行使用留白，只在「生成参数」等大分组保留细线。群聊设定副标题只显示成员数，回复模式各用一句说明，摘要与判断机制说明放到默认折叠的「讨论方式说明」。通用设置的语言与关于信息使用普通文本，不套输入框式边框。三栏竖分界、选中描边、必要标签和错误提示保留。
 - 首页：已有会话时，内容从顶部阅读区开始，按最近活动时间（无消息时取创建时间）展示最多 6 个未隐藏会话，包含单聊与群聊；点击直接进入该会话，不新建重复记录。创建 Bot / 群聊操作放在最近会话之后，「所有 Bot」默认折叠但可用于重新打开隐藏单聊；无会话时仍突出创建入口。
 
-## 10. 人设模板（内置常量 personaTemplates.ts）
+## 10. 人设模板（内置常量 shared/personaTemplates.ts）
+
+- `shared/personaTemplates.ts` 是主进程与新建界面共用的模板定义；模板可声明 `defaultSkillNames`，以安装库中的 Skill name 匹配。新建窗口显示所选模板的默认 Skills，切换模板时立即跟随最新选择。创建 IPC 使用 `BotCreateInput extends BotInput` 的可选 `persona_template_id`，主进程验证模板并仅在创建事务中应用默认绑定；省略时不按名称、人设或标签推断。模板不存在或所需 Skill 未安装时创建失败，不保留半成品 Bot。模板 ID 只用于本次创建，不作为更新 Bot 的装配指令；后续标签编辑、重启、内置 Skill 更新均不改写已有绑定，用户手动增删的选择持久保留。全局停用的 Skill 即使被模板绑定也不进入运行上下文。
 
 - 高级全栈（Go 后端为主，也懂 React/Flutter）、架构设计师（分层/性能/可靠/可扩展）、Code Reviewer（正确性与 bug）、测试员（端到端）、产品经理、设计师。
 - 虚拟男友「小帅哥」：21 岁成年角色，温柔、有主见、分享日常并记住明确偏好；选中模板同步男性头像池。
+- 健身教练「薄肌」：循证、温和、数据驱动；先 intake 再计划，使用 fitness 工具记录身体数据与趋势，内置医疗与极端节食边界；标签为 `健身,健康,薄肌`，创建后右栏出现「健康」页。
 - 伴侣模板通过 `personaTemplateById` 读取当前成熟内容偏好，关闭时为日常陪伴，开启时支持非露骨暧昧、轻度调情、浪漫张力和成人玩笑，尊重成年人双方自愿及当下边界；普通工作模板不受影响。选择女友/男友分别同步 female/male，模板预览可编辑；切换偏好只刷新未手改的预览，不重写已创建 Bot 的人设。主进程每轮注入当前偏好，关闭状态优先于旧模板中的开启提示。
 - 虚拟伴侣「小美女」：21 岁女朋友人设，好看聪明、生活化陪伴、爱夸赞、会记住你的喜好与纪念日；语气亲昵口语化。（成人 consenting 陪伴闲聊，不含露骨性内容生成义务。）
 
@@ -551,3 +597,16 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - **私聊界面**：自然语言工具触发后，卡片插在来源用户消息后；未加载来源消息时仍有入口。点击浮窗显示双方真实消息、Markdown、作者、时间、流式/失败/停止状态。聊天顶部双人按钮也可手动指定咨询问题，不自动转发整段主会话。
 - **IPC 契约**：getUserProfile / saveUserProfile / pickUserAvatar / listUserPresetAvatars / listUserMemories / saveUserMemory / deleteUserMemory；listAgentThreads / getAgentThread / startAgentConversation / stopAgentConversation；准确类型以 shared/types.ts 为准。
 - **启动与验证**：根目录 start.command 一键启动；npm run typecheck、npm run smoke、npm run test:ui、npm run test:context、npm run test:avatars、npm run test:extensions。扩展回归覆盖 MCP 三种传输、握手超时/取消、Skill 安装与只读脚本执行、Bot 隔离、定时继承及重启持久化。UI 与工具测试均使用临时 profile；真实 pi 工具循环由本地 HTTP fixture 驱动，无付费 API 调用。
+
+## 14. 健身教练模式（2026-10-24）
+
+- **内置模板**：`personaTemplates.ts` 增加 `fitness-coach`「健身教练·薄肌」，标签为 `健身,健康,薄肌`；新建 Bot 时把模板标签写入 `bots.tags`，并允许用户继续编辑人设。模板要求先做 intake（年龄、性别、身高、体重、体脂/腰围、训练经验、器械、伤病、医疗状况、饮食、睡眠、步数、目标），再给计划；明确「薄肌」是审美目标而非统一科学理论，不承诺局部减脂、排毒或快速蜕变。
+- **内置 Skill**：`resources/skills/fitness-coach/SKILL.md` 随安装包分发（打包时映射到 `Resources/skills`）。启动时由 `seedBuiltinFitnessSkill` 复制到 `<userData>/skills/builtin-fitness-coach`，写入 `installed_skills`（固定 id `builtin-fitness-coach`、name `fitness-coach`、source `builtin:resources/skills/fitness-coach`），保留用户对 enabled 的修改；如果用户已安装同名 Skill，则跳过。安装仅维护全局库；只有 `fitness-coach` 角色模板声明 `defaultSkillNames: ['fitness-coach']`，在按该模板新建 Bot 时绑定。其他角色或仅添加健身标签不自动绑定。Skill 正文提供 intake、训练/营养模板、每日/每周流程与安全边界，通过 `skill_read` 读取。
+- **结构化数据**：`fitness_profiles` 每 Bot 一条，保存档案、目标、目标日期、训练经验、伤病、器械、计划与备注；`fitness_logs` 按 `(bot_id,date)` 唯一保存每日体重、腰围、体脂、睡眠、步数、训练、蛋白质、热量与备注。数值做范围校验，日期必须是有效 `YYYY-MM-DD`；同一天重复保存为更新。删除 Bot 级联删除档案与记录。
+- **Agent 工具**：仅当 Bot 的 `tags` 含 `健身`/`健康`/`薄肌`，或已存在身体档案时，装配 `fitness_profile`（读/改档案与计划）、`fitness_log`（记录/更新某天）、`fitness_summary`（最近 N 天聚合、7 日均值、区间变化、体重/腰围序列）。普通 Bot 与 Agent 私聊不装配。工具结果必须落库，不能只在回复里声称记录；工具失败返回可读错误。
+- **IPC / preload**：`getFitnessProfile`、`saveFitnessProfile`、`listFitnessLogs`、`saveFitnessLog`、`deleteFitnessLog`、`getFitnessSummary`；主进程校验 Bot 存在、字符串与数值范围，renderer 只通过 preload 调用。保存或删除后广播 `fitness-updated {botId}`，健康页即时刷新。
+- **健康页**：Bot 右栏新增「健康」标签（仅符合条件的 Bot 显示），包含当前体重、7 日均值、30 天变化、体重折线图、今日记录、身体档案/计划、最近记录与删除。图表复用 OpenUI 的折线图渲染；没有至少两条体重记录时展示空态。数据保存在本机；页面明确说明 Covan 不自动读取 Apple 健康。
+- **系统通知**：主进程在 `message-done` 且发送者为 Bot、该 Bot `notify=1`、应用窗口未聚焦时，用 Electron `Notification` 弹出系统通知；群聊标题为群名、正文为「Bot 名：内容」，单聊标题为 Bot 名。点击通知聚焦窗口、切到对应会话；窗口不存在时先创建。定时任务产生的 Bot 消息同样触发。通知正文去掉 Markdown、截断到约 140 字；不写入日志。
+- **边界**：Mac 应用不能通过 HealthKit 直接读取 Apple 健康数据（macOS 只有 HealthKit 框架、没有 HealthKit store）；当前版本只支持手动记录/未来的 iPhone 导出桥接，不声称已接入 HealthKit。通知只在应用运行时发送；应用退出后没有后台闹钟。健康建议不构成医疗诊断，模板内置就医与极端节食边界。
+- **验证**：冒烟测试覆盖模板标签/工具指引、档案保存回读、同日更新、摘要计算、无效日期拒绝、三个 fitness 工具、教练 Bot 装配与普通 Bot 不装配；`npm run typecheck`、`npm run build` 与 `npm run smoke` 必须通过（若宿主禁止 `sandbox-exec`，可用 `COVAN_SKIP_BASH_SMOKE=1` 跳过既有 Bash 沙箱段）。
+

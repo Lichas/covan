@@ -3,6 +3,9 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { CH } from '../shared/ipcChannels'
 import type {
   BotInput,
+  BotCreateInput,
+  FitnessLogInput,
+  FitnessProfileInput,
   GroupReplyMode,
   CovanApi,
   CovanEvent,
@@ -50,6 +53,18 @@ const api: CovanApi = {
     ipcRenderer.invoke(CH.deleteScheduledTask, id),
   runScheduledTask: (id: string) =>
     ipcRenderer.invoke(CH.runScheduledTask, id),
+  getFitnessProfile: (botId: string) =>
+    ipcRenderer.invoke(CH.getFitnessProfile, botId),
+  saveFitnessProfile: (input: FitnessProfileInput) =>
+    ipcRenderer.invoke(CH.saveFitnessProfile, input),
+  listFitnessLogs: (botId: string, since?: string) =>
+    ipcRenderer.invoke(CH.listFitnessLogs, botId, since),
+  saveFitnessLog: (input: FitnessLogInput) =>
+    ipcRenderer.invoke(CH.saveFitnessLog, input),
+  deleteFitnessLog: (id: string) =>
+    ipcRenderer.invoke(CH.deleteFitnessLog, id),
+  getFitnessSummary: (botId: string, days?: number) =>
+    ipcRenderer.invoke(CH.getFitnessSummary, botId, days),
   expandAvatarPrompt: (botId, direction) =>
     ipcRenderer.invoke(CH.expandAvatarPrompt, botId, direction),
   // providers
@@ -66,7 +81,7 @@ const api: CovanApi = {
   // bots
   listPresetAvatars: () => ipcRenderer.invoke(CH.listPresetAvatars),
   listBots: () => ipcRenderer.invoke(CH.listBots),
-  createBot: (input: BotInput) => ipcRenderer.invoke(CH.createBot, input),
+  createBot: (input: BotCreateInput) => ipcRenderer.invoke(CH.createBot, input),
   updateBot: (id: string, patch: Partial<BotInput>) =>
     ipcRenderer.invoke(CH.updateBot, id, patch),
   deleteBot: (id: string) => ipcRenderer.invoke(CH.deleteBot, id),

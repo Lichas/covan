@@ -30,6 +30,10 @@
       {
         "from": "resources/user-avatars",
         "to": "user-avatars"
+      },
+      {
+        "from": "resources/skills",
+        "to": "skills"
       }
     ]
   },

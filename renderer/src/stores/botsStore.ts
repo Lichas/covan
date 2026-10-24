@@ -1,13 +1,13 @@
 // stores/botsStore.ts — Bot 列表
 import { create } from 'zustand'
-import type { Bot, BotInput } from '@shared/types'
+import type { Bot, BotInput, BotCreateInput } from '@shared/types'
 import { api } from '../lib/api'
 
 interface BotsState {
   bots: Bot[]
   loadBots: () => Promise<void>
   refreshBot: (id: string) => Promise<void>
-  createBot: (input: BotInput) => Promise<Bot>
+  createBot: (input: BotCreateInput) => Promise<Bot>
   updateBot: (id: string, patch: Partial<BotInput>) => Promise<Bot>
   deleteBot: (id: string) => Promise<void>
 }

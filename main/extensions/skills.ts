@@ -289,6 +289,82 @@ export async function installSkills(
   }
 }
 
+const BUILTIN_FITNESS_SKILL_ID = 'builtin-fitness-coach'
+const BUILTIN_FITNESS_SKILL_NAME = 'fitness-coach'
+
+/**
+ * 把 resources/skills/fitness-coach 安装到全局库，不改变任何 Bot 的装配。
+ * 每次启动重新复制资源目录，保留用户对启用状态的修改；用户自定义同名 Skill 时跳过。
+ */
+export async function seedBuiltinFitnessSkill(sourceRoot: string): Promise<void> {
+  const source = path.join(sourceRoot, BUILTIN_FITNESS_SKILL_NAME)
+  try {
+    const stat = await fs.stat(source)
+    if (!stat.isDirectory()) return
+  } catch {
+    return
+  }
+  await fs.mkdir(installedSkillsRoot(), { recursive: true })
+  const existingById = skillRecord(BUILTIN_FITNESS_SKILL_ID)
+  const existingByName = getDb()
+    .prepare('SELECT * FROM installed_skills WHERE name=?')
+    .get(BUILTIN_FITNESS_SKILL_NAME) as SkillRecord | undefined
+  if (existingByName && existingByName.id !== BUILTIN_FITNESS_SKILL_ID) return
+
+  const files = await packageFiles(source)
+  const info = metadata(await readText(path.join(source, 'SKILL.md')))
+  const temp = path.join(
+    installedSkillsRoot(),
+    `${BUILTIN_FITNESS_SKILL_ID}.tmp-${randomUUID()}`,
+  )
+  const destination = path.join(installedSkillsRoot(), BUILTIN_FITNESS_SKILL_ID)
+  await fs.mkdir(temp, { recursive: true })
+  try {
+    for (const file of files) {
+      const target = path.join(temp, file)
+      await fs.mkdir(path.dirname(target), { recursive: true })
+      await fs.copyFile(path.join(source, file), target)
+    }
+    await packageFiles(temp)
+    await fs.rm(destination, { recursive: true, force: true })
+    await fs.rename(temp, destination)
+  } finally {
+    await fs.rm(temp, { recursive: true, force: true }).catch(() => {})
+  }
+
+  getDb()
+    .prepare(
+      `INSERT INTO installed_skills
+        (id,name,description,compatibility,source,directory,enabled,file_count,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET
+         name=excluded.name,
+         description=excluded.description,
+         compatibility=excluded.compatibility,
+         source=excluded.source,
+         directory=excluded.directory,
+         file_count=excluded.file_count,
+         updated_at=excluded.updated_at`,
+    )
+    .run(
+      BUILTIN_FITNESS_SKILL_ID,
+      info.name,
+      info.description,
+      info.compatibility,
+      'builtin:resources/skills/fitness-coach',
+      destination,
+      existingById ? +existingById.enabled : 1,
+      files.length,
+      Date.now(),
+    )
+  observe('skill.installed', {
+    skill_id: BUILTIN_FITNESS_SKILL_ID,
+    file_count: files.length,
+    builtin: true,
+  })
+  extensionsChanged()
+}
+
 async function removeManagedDirectory(dir: string): Promise<void> {
   if (path.dirname(dir) === installedSkillsRoot())
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {})

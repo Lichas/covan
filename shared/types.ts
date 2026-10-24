@@ -167,6 +167,11 @@ export interface BotInput {
   pinned?: boolean
 }
 
+export interface BotCreateInput extends BotInput {
+  /** 创建时应用模板声明的默认 Skills；省略时不自动装配扩展。 */
+  persona_template_id?: string
+}
+
 export interface JevConfig {
   has_api_key: boolean
   model: string
@@ -330,6 +335,104 @@ export interface UserMemory {
   created_at: number
 }
 
+export type FitnessSex = 'female' | 'male' | 'other'
+
+/** One Bot's coaching profile. Numeric fields are optional; the coach fills them in over time. */
+export interface FitnessProfile {
+  bot_id: string
+  age: number | null
+  sex: FitnessSex | ''
+  height_cm: number | null
+  weight_kg: number | null
+  body_fat_pct: number | null
+  waist_cm: number | null
+  goal: string
+  target_weight_kg: number | null
+  target_date: string
+  experience: string
+  injuries: string
+  equipment: string
+  /** Free-form weekly plan the coach maintains. */
+  plan: string
+  notes: string
+  updated_at: number
+}
+
+export interface FitnessProfileInput {
+  bot_id: string
+  age?: number | null
+  sex?: FitnessSex | ''
+  height_cm?: number | null
+  weight_kg?: number | null
+  body_fat_pct?: number | null
+  waist_cm?: number | null
+  goal?: string
+  target_weight_kg?: number | null
+  target_date?: string
+  experience?: string
+  injuries?: string
+  equipment?: string
+  plan?: string
+  notes?: string
+}
+
+/** One calendar day's check-in. `date` is local `YYYY-MM-DD`. */
+export interface FitnessLog {
+  id: string
+  bot_id: string
+  date: string
+  weight_kg: number | null
+  waist_cm: number | null
+  body_fat_pct: number | null
+  sleep_hours: number | null
+  steps: number | null
+  workout: string
+  protein_g: number | null
+  calories: number | null
+  note: string
+  created_at: number
+}
+
+export interface FitnessLogInput {
+  id?: string
+  bot_id: string
+  date: string
+  weight_kg?: number | null
+  waist_cm?: number | null
+  body_fat_pct?: number | null
+  sleep_hours?: number | null
+  steps?: number | null
+  workout?: string
+  protein_g?: number | null
+  calories?: number | null
+  note?: string
+}
+
+export interface FitnessSummary {
+  profile: FitnessProfile
+  logs: FitnessLog[]
+  latest: {
+    date: string
+    weight_kg: number | null
+    waist_cm: number | null
+    body_fat_pct: number | null
+  } | null
+  averages: {
+    weight_kg: number | null
+    sleep_hours: number | null
+    steps: number | null
+    protein_g: number | null
+  }
+  change: {
+    weight_kg: number | null
+    waist_cm: number | null
+  }
+  series: {
+    weight: { date: string; value: number }[]
+    waist: { date: string; value: number }[]
+  }
+}
+
 export interface AgentThread {
   id: string
   parent_chat_id: string
@@ -438,6 +541,7 @@ export type CovanEvent =
   | { type: 'bot-updated'; botId: string }
   | { type: 'workspace-updated'; botId: string }
   | { type: 'scheduled-tasks-updated'; taskId?: string }
+  | { type: 'fitness-updated'; botId: string }
   | { type: 'extensions-updated'; botId?: string }
   | { type: 'system-message'; chatId: string; message: Message }
 
@@ -509,6 +613,12 @@ export interface CovanApi {
   saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>
   deleteScheduledTask(id: string): Promise<void>
   runScheduledTask(id: string): Promise<void>
+  getFitnessProfile(botId: string): Promise<FitnessProfile>
+  saveFitnessProfile(input: FitnessProfileInput): Promise<FitnessProfile>
+  listFitnessLogs(botId: string, since?: string): Promise<FitnessLog[]>
+  saveFitnessLog(input: FitnessLogInput): Promise<FitnessLog>
+  deleteFitnessLog(id: string): Promise<void>
+  getFitnessSummary(botId: string, days?: number): Promise<FitnessSummary>
   expandAvatarPrompt(botId: string, direction?: string): Promise<AvatarDesign>
   listProviders(): Promise<Provider[]>
   saveProvider(p: ProviderInput): Promise<Provider>
@@ -521,7 +631,7 @@ export interface CovanApi {
 
   listPresetAvatars(): Promise<PresetAvatar[]>
   listBots(): Promise<Bot[]>
-  createBot(input: BotInput): Promise<Bot>
+  createBot(input: BotCreateInput): Promise<Bot>
   updateBot(id: string, patch: Partial<BotInput>): Promise<Bot>
   deleteBot(id: string): Promise<void>
   pickAvatar(botId: string): Promise<string>

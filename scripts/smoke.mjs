@@ -43,6 +43,10 @@ await build({
     generativeUi: path.join(root, 'main/generativeUi.ts'),
     agentRuntime: path.join(root, 'main/agentRuntime.ts'),
     db: path.join(root, 'main/db.ts'),
+    botCreation: path.join(root, 'main/botCreation.ts'),
+    extensionStore: path.join(root, 'main/extensions/store.ts'),
+    extensionSkills: path.join(root, 'main/extensions/skills.ts'),
+    extensionRuntime: path.join(root, 'main/extensions/runtime.ts'),
     workspace: path.join(root, 'main/workspace.ts'),
     memory: path.join(root, 'main/memory.ts'),
     personas: path.join(root, 'renderer/src/lib/personaTemplates.ts'),
@@ -50,6 +54,8 @@ await build({
     bashTools: path.join(root, 'main/tools/bash.ts'),
     agentTools: path.join(root, 'main/agentTools.ts'),
     scheduledTasks: path.join(root, 'main/scheduledTasks.ts'),
+    fitness: path.join(root, 'main/fitness.ts'),
+    toolset: path.join(root, 'main/tools/toolset.ts'),
     diagnostics: path.join(root, 'main/diagnostics.ts'),
     observability: path.join(root, 'main/observability.ts'),
     decisionStrategy: path.join(root, 'main/decisionStrategy.ts'),
@@ -95,6 +101,10 @@ runPrintingRegression(
   assert,
 )
 const db = await import(pathToFileURL(path.join(bundleDir, 'db.js')).href)
+const botCreation = await import(pathToFileURL(path.join(bundleDir, 'botCreation.js')).href)
+const extensionStore = await import(pathToFileURL(path.join(bundleDir, 'extensionStore.js')).href)
+const extensionSkills = await import(pathToFileURL(path.join(bundleDir, 'extensionSkills.js')).href)
+const extensionRuntime = await import(pathToFileURL(path.join(bundleDir, 'extensionRuntime.js')).href)
 const workspace = await import(
   pathToFileURL(path.join(bundleDir, 'workspace.js')).href
 )
@@ -116,6 +126,12 @@ const agentTools = await import(
 )
 const scheduledTasks = await import(
   pathToFileURL(path.join(bundleDir, 'scheduledTasks.js')).href,
+)
+const fitness = await import(
+  pathToFileURL(path.join(bundleDir, 'fitness.js')).href,
+)
+const toolset = await import(
+  pathToFileURL(path.join(bundleDir, 'toolset.js')).href,
 )
 const diagnostics = await import(pathToFileURL(path.join(bundleDir, 'diagnostics.js')).href)
 const observability = await import(pathToFileURL(path.join(bundleDir, 'observability.js')).href)
@@ -190,6 +206,8 @@ console.log('\n[1] 建库 & schema')
     'memories',
     'settings',
     'scheduled_tasks',
+    'fitness_profiles',
+    'fitness_logs',
   ]) {
     assert(tables.includes(t), `表 ${t} 已创建`)
   }
@@ -282,6 +300,196 @@ console.log('\n[1b] 成熟内容偏好与伴侣模板')
   db.setSetting('user_profile', '')
 }
 
+console.log('\n[1b2] 健身教练档案、记录与工具')
+{
+  const coach = personas.personaTemplateById('fitness-coach', false)
+  assert(
+    coach?.tags.includes('健身') &&
+      coach.prompt.includes('fitness_profile') &&
+      coach.prompt.includes('fitness_log') &&
+      coach.prompt.includes('fitness_summary'),
+    '内置健身教练模板带健康标签与结构化工具指引',
+  )
+  const builtinSkill = path.join(root, 'resources', 'skills', 'fitness-coach', 'SKILL.md')
+  const builtinSkillText = fs.readFileSync(builtinSkill, 'utf8')
+  assert(
+    builtinSkillText.startsWith('---') &&
+      builtinSkillText.includes('name: fitness-coach') &&
+      builtinSkillText.includes('fitness_log'),
+    '内置 fitness-coach Skill 随应用分发且包含教练流程',
+  )
+  extensionStore.initExtensions(userData, { seal: (value) => value, unseal: (value) => value })
+  await extensionSkills.seedBuiltinFitnessSkill(path.join(root, 'resources', 'skills'))
+  const installedCoachSkill = extensionStore.listSkills().find((skill) => skill.name === 'fitness-coach')
+  assert(!!installedCoachSkill, '内置健身 Skill 安装到全局库')
+  for (const template of personas.PERSONA_TEMPLATES) {
+    const bot = botCreation.createBotFromTemplate({ name: template.label, persona_template_id: template.id, tags: template.tags })
+    const assigned = extensionStore.getBotExtensions(bot.id).skillIds
+    assert(
+      template.id === 'fitness-coach'
+        ? assigned.length === 1 && assigned[0] === installedCoachSkill.id
+        : assigned.length === 0,
+      `${template.label} 只装配模板声明的默认 Skills`,
+    )
+    db.deleteBot(bot.id)
+  }
+  const taggedBot = botCreation.createBotFromTemplate({ name: '仅带健身标签', tags: '健身,健康,薄肌' })
+  assert(extensionStore.getBotExtensions(taggedBot.id).skillIds.length === 0, '标签不触发默认 Skill 装配')
+  const unboundRuntime = await extensionRuntime.prepareBotExtensions(taggedBot.id, new AbortController().signal, {})
+  assert(!unboundRuntime.tools.some((tool) => tool.name === 'skill_read'), '全局已安装健身 Skill 不会注入未装配 Bot 的运行上下文')
+  await unboundRuntime.close()
+  const templateCoach = botCreation.createBotFromTemplate({ name: '模板教练', persona_template_id: 'fitness-coach' })
+  extensionStore.setBotExtensions(templateCoach.id, { mcpServerIds: [], skillIds: [] })
+  extensionStore.setBotExtensions(taggedBot.id, { mcpServerIds: [], skillIds: [installedCoachSkill.id] })
+  await extensionSkills.seedBuiltinFitnessSkill(path.join(root, 'resources', 'skills'))
+  assert(extensionStore.getBotExtensions(templateCoach.id).skillIds.length === 0, '启动安装不恢复用户已取消的模板 Skill')
+  assert(extensionStore.getBotExtensions(taggedBot.id).skillIds.includes(installedCoachSkill.id), '启动安装保留用户手动装配的 Skill')
+  db.deleteBot(templateCoach.id)
+  db.deleteBot(taggedBot.id)
+  const beforeInvalidTemplate = db.listBots().length
+  let invalidTemplateRejected = false
+  try { botCreation.createBotFromTemplate({ name: '无效模板', persona_template_id: 'not-a-template' }) } catch { invalidTemplateRejected = true }
+  assert(invalidTemplateRejected && db.listBots().length === beforeInvalidTemplate, '未知模板被拒绝且不留下半成品 Bot')
+  await extensionSkills.deleteSkill(installedCoachSkill.id)
+  let missingSkillRejected = false
+  try { botCreation.createBotFromTemplate({ name: '缺失技能', persona_template_id: 'fitness-coach' }) } catch { missingSkillRejected = true }
+  assert(missingSkillRejected && db.listBots().length === beforeInvalidTemplate, '模板 Skill 缺失时明确失败且不留下半成品 Bot')
+  await extensionSkills.seedBuiltinFitnessSkill(path.join(root, 'resources', 'skills'))
+  const coachBot = db.createBot({
+    name: '健身教练冒烟',
+    tags: coach.tags,
+    system_prompt: coach.prompt,
+  })
+  const savedProfile = db.saveFitnessProfile({
+    bot_id: coachBot.id,
+    age: 30,
+    sex: 'male',
+    height_cm: 178,
+    weight_kg: 72.5,
+    body_fat_pct: 18,
+    waist_cm: 80,
+    goal: '薄肌',
+    target_weight_kg: 70,
+    target_date: '2026-12-31',
+    experience: '中级',
+    equipment: '哑铃、杠铃',
+    plan: '每周三练',
+  })
+  assert(
+    savedProfile.age === 30 &&
+      savedProfile.goal === '薄肌' &&
+      savedProfile.target_date === '2026-12-31',
+    '身体档案保存并回读',
+  )
+  const firstLog = db.saveFitnessLog({
+    bot_id: coachBot.id,
+    date: '2026-10-20',
+    weight_kg: 72.5,
+    waist_cm: 80,
+    sleep_hours: 7.2,
+    steps: 9000,
+    workout: '下肢 A',
+    protein_g: 140,
+  })
+  db.saveFitnessLog({
+    bot_id: coachBot.id,
+    date: '2026-10-27',
+    weight_kg: 71.8,
+    waist_cm: 79,
+    sleep_hours: 7.5,
+    steps: 11000,
+    workout: '上肢 A',
+    protein_g: 150,
+  })
+  const sameDay = db.saveFitnessLog({
+    bot_id: coachBot.id,
+    date: '2026-10-20',
+    weight_kg: 72.4,
+    note: '同一天更新',
+  })
+  const summary = db.getFitnessSummary(coachBot.id, 30)
+  assert(
+    sameDay.id === firstLog.id &&
+      summary.logs.filter((log) => log.date === '2026-10-20').length === 1,
+    '同一天重复记录更新而不是新增',
+  )
+  assert(
+    summary.latest?.weight_kg === 71.8 &&
+      summary.change.weight_kg === -0.6 &&
+      summary.series.weight.length === 2 &&
+      summary.averages.sleep_hours !== null,
+    '摘要计算最新值、区间变化、序列与 7 日均值',
+  )
+  let invalidRejected = false
+  try {
+    db.saveFitnessLog({ bot_id: coachBot.id, date: '2026-02-30', weight_kg: 70 })
+  } catch {
+    invalidRejected = true
+  }
+  assert(invalidRejected, '无效日期被拒绝')
+  const profileTool = fitness
+    .createFitnessTools(coachBot.id)
+    .find((tool) => tool.name === 'fitness_profile')
+  const logTool = fitness
+    .createFitnessTools(coachBot.id)
+    .find((tool) => tool.name === 'fitness_log')
+  const summaryTool = fitness
+    .createFitnessTools(coachBot.id)
+    .find((tool) => tool.name === 'fitness_summary')
+  const profileResult = await profileTool.execute(
+    'fitness-profile',
+    { plan: '每周三练，周日复盘' },
+    new AbortController().signal,
+  )
+  const parsedProfile = JSON.parse(profileResult.content[0].text)
+  assert(parsedProfile.plan.includes('周日复盘'), 'fitness_profile 工具更新计划')
+  const logResult = await logTool.execute(
+    'fitness-log',
+    { date: '2026-10-28', weight_kg: 71.6, steps: 10000 },
+    new AbortController().signal,
+  )
+  const parsedLog = JSON.parse(logResult.content[0].text)
+  assert(
+    parsedLog.log.weight_kg === 71.6 &&
+      parsedLog.summary.logs.some((log) => log.date === '2026-10-28'),
+    'fitness_log 工具写入并返回摘要',
+  )
+  const summaryResult = await summaryTool.execute(
+    'fitness-summary',
+    { days: 14 },
+    new AbortController().signal,
+  )
+  assert(
+    JSON.parse(summaryResult.content[0].text).profile.goal === '薄肌',
+    'fitness_summary 工具返回档案与趋势',
+  )
+  const coachTools = toolset.createAgentToolset({
+    botId: coachBot.id,
+    chatId: db.createDm(coachBot.id).id,
+    signal: new AbortController().signal,
+    fitness: true,
+  })
+  assert(
+    ['fitness_profile', 'fitness_log', 'fitness_summary'].every((name) =>
+      coachTools.some((tool) => tool.name === name),
+    ),
+    '教练 Bot 装配 fitness 工具',
+  )
+  const normalBot = db.createBot({ name: '普通 Bot' })
+  const normalChat = db.createDm(normalBot.id)
+  const normalTools = toolset.createAgentToolset({
+    botId: normalBot.id,
+    chatId: normalChat.id,
+    signal: new AbortController().signal,
+    fitness: false,
+  })
+  assert(
+    !normalTools.some((tool) => tool.name.startsWith('fitness_')),
+    '普通 Bot 不装配 fitness 工具',
+  )
+  db.deleteBot(normalBot.id)
+  db.deleteBot(coachBot.id)
+}
 console.log('\n[1c] 可替换网页搜索 provider')
 {
   let received
@@ -320,6 +528,7 @@ console.log('\n[1c] 可替换网页搜索 provider')
   )
 }
 
+if (process.env.COVAN_SKIP_BASH_SMOKE !== '1') {
 console.log('\n[1d] Bash 工作区沙箱')
 {
   const bot = db.createBot({ name: 'Bash 测试' })
@@ -392,6 +601,9 @@ console.log('\n[1d] Bash 工作区沙箱')
   db.deleteBot(bot.id)
 }
 
+}
+if (process.env.COVAN_SKIP_BASH_SMOKE === '1')
+  console.log('  - 跳过 Bash 沙箱：当前环境禁止 sandbox-exec')
 console.log('\n[1e] 本地 CLI 运行后端')
 {
   const fakeCli = path.join(root, 'scripts/fixtures/fake-cli.mjs')

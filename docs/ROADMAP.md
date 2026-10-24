@@ -38,6 +38,10 @@
 - 在现有多图基础上支持 PDF、文本和代码文件。
 - 增加类型/大小检查、本地预览、模型能力提示和导出路径。
 
+### 健康数据导入与提醒闭环
+- 通过 iPhone 端的 Health Auto Export 或 Shortcuts 导出 JSON/CSV，再由本地 MCP 导入；Mac 端不直接调用 HealthKit（macOS 没有 HealthKit store）。
+- 为系统通知增加「完成 / 稍后 / 跳过」动作；应用退出后的闹钟用 macOS Reminders/Calendar 兜底。
+- 周复盘从健康页读取计划与实际完成度，生成可确认的调整建议，而不是自动改计划。
 ### 记忆相关性检索
 
 - 评估以本地 embedding 或用户 Provider 为当前会话检索相关记忆，补充现有本地词法、人物与场景检索，改善同义词、代词和别名召回。

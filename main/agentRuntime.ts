@@ -606,11 +606,18 @@ async function runPiAgent(
     ...(opts.taskId ? { scheduled_task_id: opts.taskId } : {}),
   })
   try {
+    const fitness =
+      bot.tags
+        .split(/[,，]/)
+        .map((tag) => tag.trim())
+        .some((tag) => tag === '健身' || tag === '健康' || tag === '薄肌') ||
+      db.getFitnessProfile(bot.id).updated_at > 0
     const tools = createAgentToolset({
       botId: bot.id,
       chatId,
       signal,
       privateConversation: opts.privateConversation,
+      fitness,
       onImages: callbacks.onImages,
     })
     tools.push(...(extensions?.tools ?? []))

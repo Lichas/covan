@@ -127,6 +127,10 @@ export function NewBotDialog() {
         if (!name || name === '小美女' || name === '小帅哥')
           setName(id === 'girlfriend' ? '小美女' : '小帅哥')
       }
+      if (id === 'fitness-coach') {
+        if (!name || name === '教练') setName('教练')
+        if (t) setDescription(t.description)
+      }
     }
   }
 
@@ -137,9 +141,11 @@ export function NewBotDialog() {
     try {
       const bot = await createBot({
         name: name.trim(),
+        persona_template_id: templateId,
         gender,
         avatar: selectedAvatar,
         description: description.trim(),
+        tags: personaTemplateById(templateId, acceptMatureContent)?.tags ?? '',
         system_prompt: prompt,
         provider_id: providerId || null,
         model: model.trim(),
@@ -189,6 +195,10 @@ export function NewBotDialog() {
             ))}
           </select>
         </Field>
+
+        <p aria-label="模板默认 Skills" className="text-xs text-stone-500">
+          默认 Skills：{personaTemplateById(templateId)?.defaultSkillNames?.join('、') || '无'}
+        </p>
 
         {
           <Field label="人设预览（可编辑）">

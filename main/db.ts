@@ -35,6 +35,12 @@ import type {
   ScheduledTask,
   ScheduledTaskInput,
   ScheduledTaskStatus,
+  FitnessProfile,
+  FitnessProfileInput,
+  FitnessLog,
+  FitnessLogInput,
+  FitnessSummary,
+  FitnessSex,
   WorkspaceArtifact,
 } from '../shared/types'
 import { emitEvent } from './events'
@@ -193,6 +199,41 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_bot ON scheduled_tasks(bot_id, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_chat ON scheduled_tasks(chat_id);
+CREATE TABLE IF NOT EXISTS fitness_profiles (
+  bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
+  age INTEGER,
+  sex TEXT NOT NULL DEFAULT '',
+  height_cm REAL,
+  weight_kg REAL,
+  body_fat_pct REAL,
+  waist_cm REAL,
+  goal TEXT NOT NULL DEFAULT '',
+  target_weight_kg REAL,
+  target_date TEXT NOT NULL DEFAULT '',
+  experience TEXT NOT NULL DEFAULT '',
+  injuries TEXT NOT NULL DEFAULT '',
+  equipment TEXT NOT NULL DEFAULT '',
+  plan TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS fitness_logs (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  weight_kg REAL,
+  waist_cm REAL,
+  body_fat_pct REAL,
+  sleep_hours REAL,
+  steps INTEGER,
+  workout TEXT NOT NULL DEFAULT '',
+  protein_g REAL,
+  calories REAL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  UNIQUE(bot_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_fitness_logs_bot_date ON fitness_logs(bot_id, date);
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -1384,6 +1425,400 @@ export function updateScheduledTaskRuntime(
   const task = getScheduledTask(id)
   emitEvent({ type: 'scheduled-tasks-updated', taskId: id })
   return task
+}
+
+// ---------- fitness coach ----------
+
+const FITNESS_SEXES: FitnessSex[] = ['female', 'male', 'other']
+
+function fitnessNumber(
+  value: number | null | undefined,
+  name: string,
+  min: number,
+  max: number,
+): number | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    throw new Error(`${name} 必须是数字`)
+  if (value < min || value > max)
+    throw new Error(`${name} 必须在 ${min}–${max} 之间`)
+  return value
+}
+
+function fitnessInteger(
+  value: number | null | undefined,
+  name: string,
+  min: number,
+  max: number,
+): number | null {
+  const number = fitnessNumber(value, name, min, max)
+  if (number !== null && !Number.isInteger(number))
+    throw new Error(`${name} 必须是整数`)
+  return number
+}
+
+function fitnessText(
+  value: string | undefined,
+  name: string,
+  max: number,
+  fallback = '',
+): string {
+  if (value === undefined) return fallback
+  if (typeof value !== 'string') throw new Error(`${name} 必须是文本`)
+  const text = value.trim()
+  if (text.length > max) throw new Error(`${name} 不能超过 ${max} 字`)
+  return text
+}
+
+function fitnessDate(value: string | undefined): string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    throw new Error('日期必须是 YYYY-MM-DD')
+  const [year, month, day] = value.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  )
+    throw new Error('日期无效')
+  return value
+}
+
+function localFitnessDate(date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function fitnessDateDaysAgo(days: number): string {
+  const date = new Date()
+  date.setDate(date.getDate() - Math.max(0, days))
+  return localFitnessDate(date)
+}
+
+export function defaultFitnessProfile(botId: string): FitnessProfile {
+  return {
+    bot_id: botId,
+    age: null,
+    sex: '',
+    height_cm: null,
+    weight_kg: null,
+    body_fat_pct: null,
+    waist_cm: null,
+    goal: '',
+    target_weight_kg: null,
+    target_date: '',
+    experience: '',
+    injuries: '',
+    equipment: '',
+    plan: '',
+    notes: '',
+    updated_at: 0,
+  }
+}
+
+function toFitnessProfile(row: Record<string, unknown>): FitnessProfile {
+  return {
+    bot_id: String(row.bot_id),
+    age: (row.age as number | null) ?? null,
+    sex: (row.sex as FitnessSex | '') ?? '',
+    height_cm: (row.height_cm as number | null) ?? null,
+    weight_kg: (row.weight_kg as number | null) ?? null,
+    body_fat_pct: (row.body_fat_pct as number | null) ?? null,
+    waist_cm: (row.waist_cm as number | null) ?? null,
+    goal: String(row.goal ?? ''),
+    target_weight_kg: (row.target_weight_kg as number | null) ?? null,
+    target_date: String(row.target_date ?? ''),
+    experience: String(row.experience ?? ''),
+    injuries: String(row.injuries ?? ''),
+    equipment: String(row.equipment ?? ''),
+    plan: String(row.plan ?? ''),
+    notes: String(row.notes ?? ''),
+    updated_at: Number(row.updated_at ?? 0),
+  }
+}
+
+export function getFitnessProfile(botId: string): FitnessProfile {
+  if (!getBot(botId)) throw new Error('Bot 不存在')
+  const row = getDb()
+    .prepare('SELECT * FROM fitness_profiles WHERE bot_id=?')
+    .get(botId) as Record<string, unknown> | undefined
+  return row ? toFitnessProfile(row) : defaultFitnessProfile(botId)
+}
+
+export function saveFitnessProfile(input: FitnessProfileInput): FitnessProfile {
+  if (!input || typeof input !== 'object') throw new Error('身体档案参数无效')
+  const bot = getBot(input.bot_id)
+  if (!bot) throw new Error('Bot 不存在')
+  const existing = getFitnessProfile(bot.id)
+  const sex =
+    input.sex === undefined
+      ? existing.sex
+      : input.sex === ''
+        ? ''
+        : FITNESS_SEXES.includes(input.sex)
+          ? input.sex
+          : (() => {
+              throw new Error('性别必须是 female、male 或 other')
+            })()
+  const profile: FitnessProfile = {
+    bot_id: bot.id,
+    age: input.age === undefined ? existing.age : fitnessInteger(input.age, '年龄', 1, 120),
+    sex,
+    height_cm:
+      input.height_cm === undefined
+        ? existing.height_cm
+        : fitnessNumber(input.height_cm, '身高', 50, 260),
+    weight_kg:
+      input.weight_kg === undefined
+        ? existing.weight_kg
+        : fitnessNumber(input.weight_kg, '体重', 20, 400),
+    body_fat_pct:
+      input.body_fat_pct === undefined
+        ? existing.body_fat_pct
+        : fitnessNumber(input.body_fat_pct, '体脂率', 1, 75),
+    waist_cm:
+      input.waist_cm === undefined
+        ? existing.waist_cm
+        : fitnessNumber(input.waist_cm, '腰围', 30, 250),
+    goal: fitnessText(input.goal, '目标', 500, existing.goal),
+    target_weight_kg:
+      input.target_weight_kg === undefined
+        ? existing.target_weight_kg
+        : fitnessNumber(input.target_weight_kg, '目标体重', 20, 400),
+    target_date:
+      input.target_date === undefined
+        ? existing.target_date
+        : input.target_date === ''
+          ? ''
+          : fitnessDate(input.target_date),
+    experience: fitnessText(input.experience, '训练经验', 1000, existing.experience),
+    injuries: fitnessText(input.injuries, '伤病与限制', 2000, existing.injuries),
+    equipment: fitnessText(input.equipment, '器械', 1000, existing.equipment),
+    plan: fitnessText(input.plan, '训练计划', 12000, existing.plan),
+    notes: fitnessText(input.notes, '备注', 4000, existing.notes),
+    updated_at: Date.now(),
+  }
+  getDb()
+    .prepare(
+      `INSERT INTO fitness_profiles
+        (bot_id,age,sex,height_cm,weight_kg,body_fat_pct,waist_cm,goal,target_weight_kg,target_date,experience,injuries,equipment,plan,notes,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(bot_id) DO UPDATE SET
+         age=excluded.age,
+         sex=excluded.sex,
+         height_cm=excluded.height_cm,
+         weight_kg=excluded.weight_kg,
+         body_fat_pct=excluded.body_fat_pct,
+         waist_cm=excluded.waist_cm,
+         goal=excluded.goal,
+         target_weight_kg=excluded.target_weight_kg,
+         target_date=excluded.target_date,
+         experience=excluded.experience,
+         injuries=excluded.injuries,
+         equipment=excluded.equipment,
+         plan=excluded.plan,
+         notes=excluded.notes,
+         updated_at=excluded.updated_at`,
+    )
+    .run(
+      profile.bot_id,
+      profile.age,
+      profile.sex,
+      profile.height_cm,
+      profile.weight_kg,
+      profile.body_fat_pct,
+      profile.waist_cm,
+      profile.goal,
+      profile.target_weight_kg,
+      profile.target_date,
+      profile.experience,
+      profile.injuries,
+      profile.equipment,
+      profile.plan,
+      profile.notes,
+      profile.updated_at,
+    )
+  emitEvent({ type: 'fitness-updated', botId: bot.id })
+  return getFitnessProfile(bot.id)
+}
+
+function toFitnessLog(row: Record<string, unknown>): FitnessLog {
+  return {
+    id: String(row.id),
+    bot_id: String(row.bot_id),
+    date: String(row.date),
+    weight_kg: (row.weight_kg as number | null) ?? null,
+    waist_cm: (row.waist_cm as number | null) ?? null,
+    body_fat_pct: (row.body_fat_pct as number | null) ?? null,
+    sleep_hours: (row.sleep_hours as number | null) ?? null,
+    steps: (row.steps as number | null) ?? null,
+    workout: String(row.workout ?? ''),
+    protein_g: (row.protein_g as number | null) ?? null,
+    calories: (row.calories as number | null) ?? null,
+    note: String(row.note ?? ''),
+    created_at: Number(row.created_at ?? 0),
+  }
+}
+
+export function listFitnessLogs(botId: string, since?: string): FitnessLog[] {
+  if (!getBot(botId)) throw new Error('Bot 不存在')
+  const rows = (since
+    ? getDb()
+        .prepare(
+          'SELECT * FROM fitness_logs WHERE bot_id=? AND date>=? ORDER BY date ASC, created_at ASC',
+        )
+        .all(botId, fitnessDate(since))
+    : getDb()
+        .prepare(
+          'SELECT * FROM fitness_logs WHERE bot_id=? ORDER BY date ASC, created_at ASC',
+        )
+        .all(botId)) as Record<string, unknown>[]
+  return rows.map(toFitnessLog)
+}
+
+export function saveFitnessLog(input: FitnessLogInput): FitnessLog {
+  if (!input || typeof input !== 'object') throw new Error('身体记录参数无效')
+  const bot = getBot(input.bot_id)
+  if (!bot) throw new Error('Bot 不存在')
+  const date = fitnessDate(input.date)
+  const existingRow = getDb()
+    .prepare('SELECT * FROM fitness_logs WHERE bot_id=? AND date=?')
+    .get(bot.id, date) as Record<string, unknown> | undefined
+  const existing = existingRow ? toFitnessLog(existingRow) : null
+  const now = Date.now()
+  const log: FitnessLog = {
+    id: existing?.id ?? newId(),
+    bot_id: bot.id,
+    date,
+    weight_kg:
+      input.weight_kg === undefined
+        ? (existing?.weight_kg ?? null)
+        : fitnessNumber(input.weight_kg, '体重', 20, 400),
+    waist_cm:
+      input.waist_cm === undefined
+        ? (existing?.waist_cm ?? null)
+        : fitnessNumber(input.waist_cm, '腰围', 30, 250),
+    body_fat_pct:
+      input.body_fat_pct === undefined
+        ? (existing?.body_fat_pct ?? null)
+        : fitnessNumber(input.body_fat_pct, '体脂率', 1, 75),
+    sleep_hours:
+      input.sleep_hours === undefined
+        ? (existing?.sleep_hours ?? null)
+        : fitnessNumber(input.sleep_hours, '睡眠', 0, 24),
+    steps:
+      input.steps === undefined
+        ? (existing?.steps ?? null)
+        : fitnessInteger(input.steps, '步数', 0, 200000),
+    workout: fitnessText(input.workout, '训练', 1000, existing?.workout ?? ''),
+    protein_g:
+      input.protein_g === undefined
+        ? (existing?.protein_g ?? null)
+        : fitnessNumber(input.protein_g, '蛋白质', 0, 500),
+    calories:
+      input.calories === undefined
+        ? (existing?.calories ?? null)
+        : fitnessNumber(input.calories, '热量', 0, 15000),
+    note: fitnessText(input.note, '备注', 2000, existing?.note ?? ''),
+    created_at: existing?.created_at ?? now,
+  }
+  getDb()
+    .prepare(
+      `INSERT INTO fitness_logs
+        (id,bot_id,date,weight_kg,waist_cm,body_fat_pct,sleep_hours,steps,workout,protein_g,calories,note,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(bot_id,date) DO UPDATE SET
+         weight_kg=excluded.weight_kg,
+         waist_cm=excluded.waist_cm,
+         body_fat_pct=excluded.body_fat_pct,
+         sleep_hours=excluded.sleep_hours,
+         steps=excluded.steps,
+         workout=excluded.workout,
+         protein_g=excluded.protein_g,
+         calories=excluded.calories,
+         note=excluded.note`,
+    )
+    .run(
+      log.id,
+      log.bot_id,
+      log.date,
+      log.weight_kg,
+      log.waist_cm,
+      log.body_fat_pct,
+      log.sleep_hours,
+      log.steps,
+      log.workout,
+      log.protein_g,
+      log.calories,
+      log.note,
+      log.created_at,
+    )
+  emitEvent({ type: 'fitness-updated', botId: bot.id })
+  const saved = getDb()
+    .prepare('SELECT * FROM fitness_logs WHERE bot_id=? AND date=?')
+    .get(bot.id, date) as Record<string, unknown>
+  return toFitnessLog(saved)
+}
+
+export function deleteFitnessLog(id: string): void {
+  const row = getDb()
+    .prepare('SELECT bot_id FROM fitness_logs WHERE id=?')
+    .get(id) as { bot_id: string } | undefined
+  if (!row) return
+  getDb().prepare('DELETE FROM fitness_logs WHERE id=?').run(id)
+  emitEvent({ type: 'fitness-updated', botId: row.bot_id })
+}
+
+function average(values: number[]): number | null {
+  if (!values.length) return null
+  return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10
+}
+
+export function getFitnessSummary(botId: string, days = 30): FitnessSummary {
+  const windowDays = Math.max(1, Math.min(365, Math.round(days)))
+  const logs = listFitnessLogs(botId, fitnessDateDaysAgo(windowDays))
+  const recent = logs.filter((log) => log.date >= fitnessDateDaysAgo(7))
+  const withWeight = logs.filter((log) => log.weight_kg !== null)
+  const withWaist = logs.filter((log) => log.waist_cm !== null)
+  const latestLog = logs.at(-1) ?? null
+  const firstWeight = withWeight[0]?.weight_kg ?? null
+  const lastWeight = withWeight.at(-1)?.weight_kg ?? null
+  const firstWaist = withWaist[0]?.waist_cm ?? null
+  const lastWaist = withWaist.at(-1)?.waist_cm ?? null
+  return {
+    profile: getFitnessProfile(botId),
+    logs,
+    latest: latestLog
+      ? {
+          date: latestLog.date,
+          weight_kg: latestLog.weight_kg,
+          waist_cm: latestLog.waist_cm,
+          body_fat_pct: latestLog.body_fat_pct,
+        }
+      : null,
+    averages: {
+      weight_kg: average(recent.map((log) => log.weight_kg).filter((value): value is number => value !== null)),
+      sleep_hours: average(recent.map((log) => log.sleep_hours).filter((value): value is number => value !== null)),
+      steps: average(recent.map((log) => log.steps).filter((value): value is number => value !== null)),
+      protein_g: average(recent.map((log) => log.protein_g).filter((value): value is number => value !== null)),
+    },
+    change: {
+      weight_kg:
+        firstWeight !== null && lastWeight !== null && withWeight.length > 1
+          ? Math.round((lastWeight - firstWeight) * 10) / 10
+          : null,
+      waist_cm:
+        firstWaist !== null && lastWaist !== null && withWaist.length > 1
+          ? Math.round((lastWaist - firstWaist) * 10) / 10
+          : null,
+    },
+    series: {
+      weight: withWeight.map((log) => ({ date: log.date, value: log.weight_kg! })),
+      waist: withWaist.map((log) => ({ date: log.date, value: log.waist_cm! })),
+    },
+  }
 }
 
 // ---------- messages ----------
