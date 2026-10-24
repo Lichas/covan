@@ -57,6 +57,7 @@ await build({
     fitness: path.join(root, 'main/fitness.ts'),
     welcome: path.join(root, 'main/welcome.ts'),
     toolset: path.join(root, 'main/tools/toolset.ts'),
+    notificationText: path.join(root, 'main/notificationText.ts'),
     diagnostics: path.join(root, 'main/diagnostics.ts'),
     observability: path.join(root, 'main/observability.ts'),
     decisionStrategy: path.join(root, 'main/decisionStrategy.ts'),
@@ -133,6 +134,9 @@ const fitness = await import(
 )
 const toolset = await import(
   pathToFileURL(path.join(bundleDir, 'toolset.js')).href,
+)
+const notificationText = await import(
+  pathToFileURL(path.join(bundleDir, 'notificationText.js')).href,
 )
 const welcome = await import(
   pathToFileURL(path.join(bundleDir, 'welcome.js')).href,
@@ -493,7 +497,19 @@ console.log('\n[1b2] 健身教练档案、记录与工具')
   )
   db.deleteBot(normalBot.id)
   db.deleteBot(coachBot.id)
+  const body = notificationText.notificationBody(
+    '**今日**：[训练计划](https://example.com)\n\n```ts\nconst secret = 1\n```\n' +
+      '很长的正文'.repeat(60),
+  )
+  assert(
+    body.startsWith('今日') &&
+      !body.includes('https://') &&
+      !body.includes('```') &&
+      body.length <= 140,
+    '系统通知正文去掉 Markdown、链接与代码块并截断',
+  )
 }
+
 console.log('\n[1b3] 首次开场白：模板 fallback、异步升级、去重与重新生成')
 {
   const mockProvider = db.saveProvider({ name: 'Welcome Mock', kind: 'mock' })
@@ -556,6 +572,7 @@ console.log('\n[1b3] 首次开场白：模板 fallback、异步升级、去重�
   db.deleteBot(welcomeBot.id)
   db.deleteProvider(mockProvider.id)
 }
+
 console.log('\n[1c] 可替换网页搜索 provider')
 {
   let received

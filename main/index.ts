@@ -3,10 +3,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, nativeTheme, net, protocol, safeStorage } from 'electron'
-import type { CovanEvent } from '../shared/types'
+import { app, BrowserWindow, nativeTheme, net, Notification, protocol, safeStorage } from 'electron'
+import type { CovanEvent, Message } from '../shared/types'
 import { CH } from '../shared/ipcChannels'
-import { getDb, getSetting, initDb } from './db'
+import { getBot, getChat, getDb, getSetting, initDb } from './db'
 import { initWorkspace, resolveWorkspaceFile } from './workspace'
 import { initialVibrancy, setShellWindow } from './windowShell'
 import { initOrchestrator, runScheduledTask } from './orchestrator'
@@ -28,6 +28,7 @@ import { seedBuiltinFitnessSkill } from './extensions/skills'
 import { repairWelcomeNames } from './welcome'
 import { closeMcpSessions, configureMcpFetch } from './extensions/mcp'
 import { initResponseDecisionEngine } from './decisionStrategy'
+import { notificationBody } from './notificationText'
 import { registerWorkspaceHtmlPreview } from './workspaceHtmlPreview'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -219,8 +220,59 @@ function registerImageProtocols(userData: string): void {
   })
 }
 
+const liveNotifications = new Set<Notification>()
+
+/** 把通知点击带到对应会话；窗口不在时先创建，再在加载完成后发送。 */
+function openChatFromNotification(chatId: string): void {
+  let win = BrowserWindow.getAllWindows()[0]
+  if (!win) win = createWindow()
+  if (!win) return
+  win.show()
+  win.focus()
+  const send = () =>
+    win?.webContents.send(CH.event, {
+      type: 'notification-click',
+      chatId,
+    } satisfies CovanEvent)
+  const sendWhenReady = () => {
+    // 让 renderer 的 React effect 先完成事件订阅。
+    setTimeout(send, 120)
+  }
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', sendWhenReady)
+  else sendWhenReady()
+}
+
+function notifyBotMessage(chatId: string, message: Message): void {
+  if (message.sender_type !== 'bot') return
+  if (!Notification.isSupported()) return
+  const chat = getChat(chatId)
+  if (!chat) return
+  const bot = message.sender_bot_id ? getBot(message.sender_bot_id) : null
+  if (bot && bot.notify === 0) return
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused && !focused.isDestroyed() && focused.isFocused()) return
+  const body = notificationBody(message.content)
+  if (!body) return
+  const title =
+    chat.type === 'group'
+      ? chat.name || 'Covan 群聊'
+      : bot?.name || 'Covan'
+  const notification = new Notification({
+    title,
+    body: chat.type === 'group' && bot ? `${bot.name}：${body}` : body,
+  })
+  liveNotifications.add(notification)
+  notification.on('close', () => liveNotifications.delete(notification))
+  notification.on('click', () => {
+    liveNotifications.delete(notification)
+    openChatFromNotification(chatId)
+  })
+  notification.show()
+}
+
 /** 向所有窗口广播 Covan 事件 */
 function broadcast(ev: CovanEvent): void {
+  if (ev.type === 'message-done') notifyBotMessage(ev.chatId, ev.message)
   for (const win of BrowserWindow.getAllWindows()) {
     try {
       win.webContents.send(CH.event, ev)
@@ -238,7 +290,7 @@ function setDockIcon(): void {
   if (fs.existsSync(iconPath)) app.dock.setIcon(iconPath)
 }
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   const theme = getSetting('theme')
   nativeTheme.themeSource = theme === 'dark' || theme === 'system' ? theme : 'light'
   const transparency = getSetting('window_transparency')
@@ -291,6 +343,7 @@ function createWindow(): void {
   } else {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
+  return win
 }
 
 void app.whenReady().then(async () => {

@@ -60,6 +60,16 @@ export default function App() {
           void useScheduledTasksStore.getState().loadTasks()
           break
         }
+        case 'notification-click': {
+          const ui = useUiStore.getState()
+          ui.setSettingsOpen(false)
+          ui.setNewBotOpen(false)
+          ui.setNewGroupOpen(false)
+          ui.setProfileOpen(false)
+          ui.setInviteChatId(null)
+          void useChatsStore.getState().selectChat(ev.chatId)
+          break
+        }
         default:
           break
       }

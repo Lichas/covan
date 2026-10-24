@@ -544,6 +544,7 @@ export type CovanEvent =
   | { type: 'workspace-updated'; botId: string }
   | { type: 'scheduled-tasks-updated'; taskId?: string }
   | { type: 'fitness-updated'; botId: string }
+  | { type: 'notification-click'; chatId: string }
   | { type: 'extensions-updated'; botId?: string }
   | { type: 'system-message'; chatId: string; message: Message }
 

@@ -329,6 +329,7 @@ type CovanEvent =
   | { type: 'bot-updated'; botId: string }
   | { type: 'scheduled-tasks-updated'; taskId?: string }
   | { type: 'fitness-updated'; botId: string }
+  | { type: 'notification-click'; chatId: string }
   | { type: 'system-message'; chatId: string; message: Message };
 ```
 
