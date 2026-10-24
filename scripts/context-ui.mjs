@@ -343,6 +343,24 @@ try {
   await item('开发伙伴').click()
   await page.getByRole('button', { name: '展开设置' }).click()
   await page.getByRole('button', { name: '设定', exact: true }).click()
+  const botTabs = page.getByRole('group', { name: 'Bot 功能标签' })
+  const expectBotTabs = async (selected, count) => {
+    const buttons = botTabs.getByRole('button')
+    await expect(buttons).toHaveCount(count)
+    await expect(botTabs.locator('button[aria-pressed="true"]')).toHaveCount(1)
+    for (const button of await buttons.all()) {
+      const name = await button.getAttribute('aria-label')
+      await expect(button).toHaveAttribute('title', name)
+      await expect(button.locator('svg[aria-hidden="true"]')).toHaveCount(1)
+      await expect(button).toHaveText(name === selected ? selected : '')
+    }
+    assert.equal(await botTabs.evaluate((element) => element.scrollWidth > element.clientWidth), false, '功能标签不可横向溢出')
+  }
+  await expectBotTabs('设定', 6)
+  await botTabs.screenshot({ path: path.join(artifacts, 'bot-tabs-icons.png') })
+  await botTabs.getByRole('button', { name: '工作区', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await expectBotTabs('工作区', 6)
   const editPersonaButton = page.getByRole('button', { name: '编辑人设', exact: true })
   await editPersonaButton.scrollIntoViewIfNeeded()
   await expect(editPersonaButton).toBeVisible()

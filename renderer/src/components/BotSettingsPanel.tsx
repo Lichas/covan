@@ -1,5 +1,6 @@
 // components/BotSettingsPanel.tsx — 右栏：Bot 资料 / 记忆 / 工作区
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { Images, SlidersHorizontal, HeartPulse, Brain, FolderOpen, Clock3, Puzzle, type LucideIcon } from 'lucide-react'
 import type {
   Bot,
   ChatSummary,
@@ -953,14 +954,15 @@ export function BotSettingsPanel({
     )
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'lifestyle', label: '生活照' },
-    { id: 'settings', label: '设定' },
-    { id: 'memory', label: '记忆' },
-    { id: 'workspace', label: '工作区' },
-    { id: 'scheduled', label: '定时' },
-    { id: 'extensions', label: '扩展' },
+  const tabs: { id: Tab; label: string; icon: LucideIcon }[] = [
+    { id: 'lifestyle', label: '生活照', icon: Images },
+    { id: 'settings', label: '设定', icon: SlidersHorizontal },
+    { id: 'memory', label: '记忆', icon: Brain },
+    { id: 'workspace', label: '工作区', icon: FolderOpen },
+    { id: 'scheduled', label: '定时', icon: Clock3 },
+    { id: 'extensions', label: '扩展', icon: Puzzle },
   ]
+  const activeTab: Tab = tabs.some((entry) => entry.id === tab) ? tab : 'settings'
 
   return (
     <aside
@@ -1016,31 +1018,42 @@ export function BotSettingsPanel({
       />
 
       {/* Tabs */}
-      <div className="grid grid-cols-6 border-b border-stone-200 px-2 dark:border-stone-800">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            aria-pressed={tab === t.id}
-            className={`relative min-w-0 whitespace-nowrap px-0.5 py-2.5 text-[12px] transition ${
-              tab === t.id
-                ? 'font-medium text-stone-800 dark:text-stone-100'
-                : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
-            }`}
-          >
-            {t.label}
-            {tab === t.id && (
-              <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-stone-700 dark:bg-stone-300" />
-            )}
-          </button>
-        ))}
+      <div
+        role="group"
+        aria-label="Bot 功能标签"
+        className="flex shrink-0 items-center gap-1 border-b border-stone-200 px-2 dark:border-stone-800"
+      >
+        {tabs.map((t) => {
+          const selected = activeTab === t.id
+          const Icon = t.icon
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              aria-label={t.label}
+              title={t.label}
+              aria-pressed={selected}
+              className={`relative flex min-w-8 items-center justify-center gap-1.5 whitespace-nowrap py-2.5 text-[12px] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-stone-400 ${
+                selected
+                  ? 'flex-none px-2.5 font-medium text-stone-800 dark:text-stone-100'
+                  : 'flex-1 px-1 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
+              }`}
+            >
+              <Icon size={17} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
+              {selected && <span>{t.label}</span>}
+              {selected && (
+                <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-stone-700 dark:bg-stone-300" />
+              )}
+            </button>
+          )
+        })}
       </div>
 
       <div
-        key={`${bot.id}:${tab}`}
+        key={`${bot.id}:${activeTab}`}
         className="scroll-thin flex min-h-0 flex-1 flex-col overflow-y-auto"
       >
-        {tab === 'settings' && (
+        {activeTab === 'settings' && (
           <ProfileTab
             key={bot.id}
             bot={bot}
@@ -1050,11 +1063,11 @@ export function BotSettingsPanel({
             onEditAvatar={() => setAvatarOpen(true)}
           />
         )}
-        {tab === 'memory' && <MemoryPanel botId={bot.id} sceneId={chat.id} />}
-        {tab === 'workspace' && <WorkspacePanel botId={bot.id} />}
-        {tab === 'scheduled' && <ScheduledTasksPanel bot={bot} chat={chat} />}
-        {tab === 'extensions' && <ExtensionsPanel key={bot.id} botId={bot.id} />}
-        {tab === 'lifestyle' && <AvatarLifestyle bot={bot} />}
+        {activeTab === 'memory' && <MemoryPanel botId={bot.id} sceneId={chat.id} />}
+        {activeTab === 'workspace' && <WorkspacePanel botId={bot.id} />}
+        {activeTab === 'scheduled' && <ScheduledTasksPanel bot={bot} chat={chat} />}
+        {activeTab === 'extensions' && <ExtensionsPanel key={bot.id} botId={bot.id} />}
+        {activeTab === 'lifestyle' && <AvatarLifestyle bot={bot} />}
       </div>
     </aside>
   )
