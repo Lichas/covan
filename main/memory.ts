@@ -23,6 +23,9 @@ export function buildSystemPrompt(
     base ||
       `你是 ${bot.name}。${bot.description || '请友好、简洁地用中文回复。'}`,
   )
+  parts.push(
+    `## 当前身份\n你的当前名称是「${bot.name}」。人设中如果出现旧名、模板名或不同称呼，以当前名称为准；自我介绍时使用「${bot.name}」，除非用户明确要求使用其他称呼。`,
+  )
   const profile = db.getUserProfile()
   const about = Object.entries(profile)
     .filter(

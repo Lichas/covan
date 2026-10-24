@@ -32,6 +32,7 @@ export const CH = {
   saveScheduledTask: 'scheduledTasks:save',
   deleteScheduledTask: 'scheduledTasks:delete',
   runScheduledTask: 'scheduledTasks:run',
+  regenerateWelcome: 'chats:regenerateWelcome',
   getFitnessProfile: 'fitness:profile',
   saveFitnessProfile: 'fitness:saveProfile',
   listFitnessLogs: 'fitness:logs',

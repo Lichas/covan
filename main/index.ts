@@ -25,6 +25,7 @@ import { isGroupBackground } from '../shared/groupBackgrounds'
 import { startScheduledTasks, stopScheduledTasks } from './scheduledTasks'
 import { initExtensions } from './extensions/store'
 import { seedBuiltinFitnessSkill } from './extensions/skills'
+import { repairWelcomeNames } from './welcome'
 import { closeMcpSessions, configureMcpFetch } from './extensions/mcp'
 import { initResponseDecisionEngine } from './decisionStrategy'
 
@@ -292,6 +293,7 @@ void app.whenReady().then(async () => {
   prepareUserDataDir(userData)
   registerImageProtocols(userData)
   initDb(userData)
+  repairWelcomeNames()
   startMemorySummaries()
   initObservability(userData)
   initResponseDecisionEngine({

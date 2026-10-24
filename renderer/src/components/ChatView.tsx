@@ -436,6 +436,7 @@ export function ChatView({
                   onInspectBot={inspectBot}
                   onRetry={(msg) => void retry(chat.id, msg)}
                   onQuote={quote}
+                  onRegenerateWelcome={() => void api.regenerateWelcome(chat.id)}
                   onUiReply={chat.member_bots.some((member) => member.id === m.sender_bot_id) ? (message, text) => {
                     const source = message.sender_bot_id && botMap.get(message.sender_bot_id)
                     if (source) stageUiReply(chat, message, source, text)

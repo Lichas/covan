@@ -56,6 +56,7 @@ import { createBotFromTemplate } from './botCreation'
 import { registerCliIpc } from './cli/ipc'
 import { getJevConfig, saveJevConfig, testJev } from './decisionStrategy'
 import { printWorkspaceFile, pickAndPrintDocument } from './printing'
+import { ensureWelcome, regenerateWelcome } from './welcome'
 
 // ---------- 参数校验 ----------
 
@@ -295,7 +296,13 @@ export function registerIpc(): void {
   handle(CH.createDm, (botId: string) => {
     assertStr(botId, 'botId')
     if (!db.getBot(botId)) throw new Error('Bot 不存在')
-    return db.createDm(botId)
+    const chat = db.createDm(botId)
+    ensureWelcome(chat.id)
+    return chat
+  })
+  handle(CH.regenerateWelcome, (chatId: string) => {
+    assertStr(chatId, 'chatId')
+    return regenerateWelcome(chatId)
   })
   handle(
     CH.createGroup,

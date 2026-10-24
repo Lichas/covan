@@ -574,7 +574,7 @@ try {
     { timeout: 20000 },
   )
   await expect(
-    page.locator('article[data-status="done"] .markdown-content'),
+    page.locator('article[data-status="done"] .markdown-content').last(),
   ).toContainText('已完成')
   const artifactCard = page.locator('.artifact-card')
   await expect(artifactCard).toHaveCount(1)

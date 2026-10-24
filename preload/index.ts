@@ -45,6 +45,8 @@ const api: CovanApi = {
     ipcRenderer.invoke(CH.startAgentConversation, chatId, from, to, message),
   stopAgentConversation: (threadId) =>
     ipcRenderer.invoke(CH.stopAgentConversation, threadId),
+  regenerateWelcome: (chatId: string) =>
+    ipcRenderer.invoke(CH.regenerateWelcome, chatId),
   listScheduledTasks: (botId?: string) =>
     ipcRenderer.invoke(CH.listScheduledTasks, botId),
   saveScheduledTask: (input: ScheduledTaskInput) =>

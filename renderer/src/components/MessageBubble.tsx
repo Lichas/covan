@@ -19,6 +19,7 @@ interface Props {
   onRetry?: (message: Message) => void
   onQuote?: (message: Message) => void
   onUiReply?: (message: Message, text: string) => void
+  onRegenerateWelcome?: (message: Message) => void
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -31,6 +32,7 @@ export const MessageBubble = memo(function MessageBubble({
   onRetry,
   onQuote,
   onUiReply,
+  onRegenerateWelcome,
 }: Props) {
   if (message.sender_type === 'system') {
     if (!message.content) return null
@@ -86,6 +88,9 @@ export const MessageBubble = memo(function MessageBubble({
             {formatMessageTime(message.created_at)}
           </time>
           {streaming && <span className="generation-label">正在回复</span>}
+          {message.system_kind === 'welcome' && (
+            <span className="generation-label">开场</span>
+          )}
         </div>
         <div className={`message-surface ${isError ? 'message-error' : ''}`}>
           {message.attachments.length > 0 && (
@@ -146,6 +151,17 @@ export const MessageBubble = memo(function MessageBubble({
               </>
             )}
             {!isUser && <CopyButton compact label="复制诊断标识" text={`covan-debug:v1:${message.id}`} icon={<BugIcon size={14} />} />}
+            {message.system_kind === 'welcome' && (
+              <button
+                className="message-action"
+                disabled={busy}
+                onClick={() => onRegenerateWelcome?.(message)}
+                title="重新生成开场白"
+              >
+                <RefreshIcon width={14} height={14} />
+                重新生成开场白
+              </button>
+            )}
             {isError && (
               <button
                 className="message-action"

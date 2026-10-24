@@ -38,6 +38,11 @@
 - 在现有多图基础上支持 PDF、文本和代码文件。
 - 增加类型/大小检查、本地预览、模型能力提示和导出路径。
 
+### 开场白与主动问候
+- 为每个人设模板增加 `opening` 配置（hint / fallback / suggestedPrompts），并允许用户在新 Bot 开场白中看到可点击的建议入口。
+- 群聊新建时由协调者发一条群开场，而不是每个成员各发一条。
+- 设置中增加「允许用我的资料和共享记忆生成开场白」开关；对敏感资料提供更保守的 fallback。
+
 ### 健康数据导入与提醒闭环
 - 通过 iPhone 端的 Health Auto Export 或 Shortcuts 导出 JSON/CSV，再由本地 MCP 导入；Mac 端不直接调用 HealthKit（macOS 没有 HealthKit store）。
 - 为系统通知增加「完成 / 稍后 / 跳过」动作；应用退出后的闹钟用 macOS Reminders/Calendar 兜底。

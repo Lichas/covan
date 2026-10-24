@@ -250,7 +250,7 @@ export interface Message {
   mentions: string[]
   status: MessageStatus
   error: string
-  system_kind?: '' | 'topic_boundary'
+  system_kind?: '' | 'topic_boundary' | 'welcome'
   created_at: number
 }
 
@@ -613,6 +613,7 @@ export interface CovanApi {
   saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>
   deleteScheduledTask(id: string): Promise<void>
   runScheduledTask(id: string): Promise<void>
+  regenerateWelcome(chatId: string): Promise<Message | null>
   getFitnessProfile(botId: string): Promise<FitnessProfile>
   saveFitnessProfile(input: FitnessProfileInput): Promise<FitnessProfile>
   listFitnessLogs(botId: string, since?: string): Promise<FitnessLog[]>

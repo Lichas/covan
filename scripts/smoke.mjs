@@ -55,6 +55,7 @@ await build({
     agentTools: path.join(root, 'main/agentTools.ts'),
     scheduledTasks: path.join(root, 'main/scheduledTasks.ts'),
     fitness: path.join(root, 'main/fitness.ts'),
+    welcome: path.join(root, 'main/welcome.ts'),
     toolset: path.join(root, 'main/tools/toolset.ts'),
     diagnostics: path.join(root, 'main/diagnostics.ts'),
     observability: path.join(root, 'main/observability.ts'),
@@ -132,6 +133,9 @@ const fitness = await import(
 )
 const toolset = await import(
   pathToFileURL(path.join(bundleDir, 'toolset.js')).href,
+)
+const welcome = await import(
+  pathToFileURL(path.join(bundleDir, 'welcome.js')).href,
 )
 const diagnostics = await import(pathToFileURL(path.join(bundleDir, 'diagnostics.js')).href)
 const observability = await import(pathToFileURL(path.join(bundleDir, 'observability.js')).href)
@@ -489,6 +493,68 @@ console.log('\n[1b2] 健身教练档案、记录与工具')
   )
   db.deleteBot(normalBot.id)
   db.deleteBot(coachBot.id)
+}
+console.log('\n[1b3] 首次开场白：模板 fallback、异步升级、去重与重新生成')
+{
+  const mockProvider = db.saveProvider({ name: 'Welcome Mock', kind: 'mock' })
+  const welcomeBot = db.createBot({
+    name: '开场测试',
+    description: '测试角色',
+    system_prompt: '你叫小美女，是用户的伴侣。',
+    tags: '开发,评审',
+    provider_id: mockProvider.id,
+  })
+  const welcomeChat = db.createDm(welcomeBot.id)
+  const first = welcome.ensureWelcome(welcomeChat.id)
+  assert(
+    first?.system_kind === 'welcome' &&
+      !!first?.content &&
+      first.sender_type === 'bot' &&
+      first.content.includes('开场测试'),
+    '空 DM 插入一条欢迎消息并标记 welcome，且使用当前 Bot 名称',
+  )
+  const normalized = welcome.normalizeWelcomeText('嗨，我是小美女。', welcomeBot)
+  assert(
+    normalized.includes('开场测试') && !normalized.includes('小美女'),
+    '生成文本把模板旧名替换为当前 Bot 名称',
+  )
+  if (first) db.updateMessage(first.id, { content: '嗨，我是小美女。' })
+  welcome.repairWelcomeNames()
+  assert(
+    !!db.getWelcomeMessage(welcomeChat.id)?.content.includes('开场测试'),
+    '启动修复会改写旧欢迎消息里的模板旧名',
+  )
+  assert(
+    db.listMemories(welcomeBot.id).length === 0,
+    '欢迎消息不写入即时记忆',
+  )
+  await sleep(300)
+  const generated = db.getWelcomeMessage(welcomeChat.id)
+  assert(
+    !!generated?.content && generated.content.length > 0,
+    '欢迎消息在后台完成一次文本生成或保留 fallback',
+  )
+  const again = welcome.ensureWelcome(welcomeChat.id)
+  assert(again?.id === first?.id, '再次打开不会重复生成欢迎消息')
+  const welcomeCount = db
+    .listMessages(welcomeChat.id, undefined, 20)
+    .filter((message) => message.system_kind === 'welcome').length
+  assert(welcomeCount === 1, '同一 DM 只有一条欢迎消息')
+  const before = db.getWelcomeMessage(welcomeChat.id)
+  const regenerated = welcome.regenerateWelcome(welcomeChat.id)
+  assert(
+    regenerated?.id === before?.id,
+    '重新生成复用同一条欢迎消息而不是新增',
+  )
+  await sleep(300)
+  assert(
+    db
+      .listMessages(welcomeChat.id, undefined, 20)
+      .filter((message) => message.system_kind === 'welcome').length === 1,
+    '重新生成后仍只有一条欢迎消息',
+  )
+  db.deleteBot(welcomeBot.id)
+  db.deleteProvider(mockProvider.id)
 }
 console.log('\n[1c] 可替换网页搜索 provider')
 {

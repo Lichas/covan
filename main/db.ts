@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS bots (
   response_decision_strategy TEXT NOT NULL DEFAULT 'auto',
   workspace_dir TEXT NOT NULL DEFAULT '',
   notify INTEGER NOT NULL DEFAULT 1,
+  welcome_at INTEGER NOT NULL DEFAULT 0,
   is_coordinator INTEGER NOT NULL DEFAULT 0,
   pinned INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -313,6 +314,8 @@ export function initDb(dir: string): Db {
       '1',
     )
   }
+  if (!botColumns.some((column) => column.name === 'welcome_at'))
+    d.exec('ALTER TABLE bots ADD COLUMN welcome_at INTEGER NOT NULL DEFAULT 0')
   if (!botColumns.some((column) => column.name === 'gender')) {
     d.exec("ALTER TABLE bots ADD COLUMN gender TEXT NOT NULL DEFAULT 'female'")
     for (const preset of PRESET_AVATARS.filter((p) => p.gender === 'male'))
@@ -707,7 +710,9 @@ function toMessage(r: MessageRow): Message {
     status: r.status as MessageStatus,
     error: r.error,
     system_kind:
-      r.system_kind === 'topic_boundary' ? 'topic_boundary' : '',
+      r.system_kind === 'topic_boundary' || r.system_kind === 'welcome'
+        ? r.system_kind
+        : '',
     created_at: r.created_at,
   }
 }
@@ -823,6 +828,27 @@ export function getBot(id: string): Bot | null {
     | BotRow
     | undefined
   return r ? toBot(r) : null
+}
+
+/** 0 means the first-run welcome has never been produced for this Bot. */
+export function getBotWelcomeAt(botId: string): number {
+  const row = getDb()
+    .prepare('SELECT welcome_at FROM bots WHERE id=?')
+    .get(botId) as { welcome_at?: number } | undefined
+  return row?.welcome_at ?? 0
+}
+
+export function markBotWelcomeAt(botId: string): void {
+  getDb().prepare('UPDATE bots SET welcome_at=? WHERE id=?').run(Date.now(), botId)
+}
+
+export function getWelcomeMessage(chatId: string): Message | null {
+  const row = getDb()
+    .prepare(
+      "SELECT * FROM messages WHERE chat_id=? AND system_kind='welcome' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+    )
+    .get(chatId) as MessageRow | undefined
+  return row ? toMessage(row) : null
 }
 
 export function createBot(input: BotInput): Bot {
@@ -1833,7 +1859,7 @@ export interface InsertMessageInput {
   mentions?: string[]
   status?: MessageStatus
   error?: string
-  system_kind?: '' | 'topic_boundary'
+  system_kind?: '' | 'topic_boundary' | 'welcome'
 }
 
 export function insertMessage(input: InsertMessageInput): Message {
@@ -2192,7 +2218,8 @@ function captureMemory(
 }
 
 function captureChatMemory(message: Message): void {
-  if (message.sender_type === 'system') return
+  if (message.sender_type === 'system' || message.system_kind === 'welcome')
+    return
   const owners = listMemberBots(message.chat_id).map((bot) => bot.id)
   captureMemory(message, owners, ['user', ...owners], message.sender_bot_id ?? 'user', 'chat', message.chat_id)
 }

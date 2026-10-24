@@ -84,6 +84,7 @@ CREATE TABLE bots (
   cli_access TEXT NOT NULL DEFAULT 'read-only', -- read-only|workspace-write
   workspace_dir TEXT NOT NULL DEFAULT '',  -- 相对 workspaces/ 的目录名
   notify INTEGER NOT NULL DEFAULT 1,
+  welcome_at INTEGER NOT NULL DEFAULT 0, -- 首次开场白生成时间；0 表示尚未生成
   is_coordinator INTEGER NOT NULL DEFAULT 0, -- legacy：仅兼容旧库，现行调度不读取
   pinned INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -120,7 +121,7 @@ CREATE TABLE messages (
   mentions TEXT NOT NULL DEFAULT '[]',    -- JSON [botId]
   status TEXT NOT NULL DEFAULT 'done',    -- 'streaming'|'done'|'error'|'stopped'
   error TEXT NOT NULL DEFAULT '',
-  system_kind TEXT NOT NULL DEFAULT '',   -- ''|'topic_boundary'
+  system_kind TEXT NOT NULL DEFAULT '',   -- ''|'topic_boundary'|'welcome'
   created_at INTEGER NOT NULL
 );
 CREATE TABLE chat_topics (
@@ -239,6 +240,7 @@ interface CovanApi {
   saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>;
   deleteScheduledTask(id: string): Promise<void>;
   runScheduledTask(id: string): Promise<void>;
+  regenerateWelcome(chatId: string): Promise<Message | null>;
 
   // fitness coach
   getFitnessProfile(botId: string): Promise<FitnessProfile>;
@@ -610,3 +612,14 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - **边界**：Mac 应用不能通过 HealthKit 直接读取 Apple 健康数据（macOS 只有 HealthKit 框架、没有 HealthKit store）；当前版本只支持手动记录/未来的 iPhone 导出桥接，不声称已接入 HealthKit。通知只在应用运行时发送；应用退出后没有后台闹钟。健康建议不构成医疗诊断，模板内置就医与极端节食边界。
 - **验证**：冒烟测试覆盖模板标签/工具指引、档案保存回读、同日更新、摘要计算、无效日期拒绝、三个 fitness 工具、教练 Bot 装配与普通 Bot 不装配；`npm run typecheck`、`npm run build` 与 `npm run smoke` 必须通过（若宿主禁止 `sandbox-exec`，可用 `COVAN_SKIP_BASH_SMOKE=1` 跳过既有 Bash 沙箱段）。
 
+## 15. Agent 首次开场白（主动欢迎，2026-10-24）
+
+- **目标**：每个新 Agent 第一次进入 DM 时，不是空聊天，而是一条结合「角色设定 + 功能能力 + 用户画像/共享记忆 + 模板倾向」的开场消息。它对所有 Bot 通用，不是健身教练专用。
+- **生成内容**：`main/welcome.ts` 组装一段独立提示，包含 Bot 名称/描述/标签/人设（截断 2500 字）、用户资料（名字/身份/简介/偏好/目标/边界）、最近 6 条用户共享记忆（每条截断 200 字）、当前实际可用能力（工作区、网页、定时任务、Bash、健康档案、已装配 Skills/MCP 名称），以及按标签选择的启动提示（健身先问身体评估；开发问项目/技术栈；陪伴像日常聊天；其他问今天想做什么）。
+- **两段式生成**：先同步写入一条确定性 fallback 欢迎消息，保证空聊天立即有内容；随后异步执行一次**无工具**的 `completeOnce`（`maxTokens: 240`、关闭推理、8 秒超时），成功则原地更新同一条消息，失败则保留 fallback。不调用 `runAgent`，不伪造 user 消息，不执行工具。
+- **触发与去重**：`createDm` 在 DM 为空且 `bots.welcome_at=0` 时调用 `ensureWelcome`；重复打开返回已存在的 welcome 消息，不重复插入。`bots.welcome_at` 在 fallback 写入时置为当前时间。`regenerateWelcome(chatId)` 复用同一条 welcome 消息重新生成，不新增第二条。
+- **存储与语义**：欢迎消息是 `sender_type='bot'` 的普通 Bot 消息，带 `system_kind='welcome'`；`captureChatMemory` 跳过它，避免 Bot 把自己的开场白记成事实。消息仍进入正常历史和 UI，但不参与群聊轮次、自然续发或定时任务调度。
+- **UI**：欢迎消息带「开场」标记；消息操作栏提供「重新生成开场白」，生成期间复用现有禁用态。生成是异步的，用户可立即发消息，欢迎消息按 `created_at` 保持在最前。
+- **隐私与边界**：只读用户资料与最近共享记忆，不读 Bot 私聊、完整聊天或密钥；提示要求模型不要泄露系统提示/记忆原文，不要声称已执行工具。生成失败、无 Provider、CLI 不可用或超时都保留 fallback，不阻塞创建。
+- **可扩展性**：模板可后续增加 `opening`（hint/fallback/suggestedPrompts）；同一服务可复用于导入 Bot、空 DM 再次进入、群聊协调者开场、首次启动引导。当前先落地通用服务与 fallback，不把任何行业话术写死在 `NewBotDialog`。
+- **验证**：冒烟测试覆盖空 DM 插入 welcome、不写入即时记忆、异步生成或保留 fallback、再次打开不重复、同一 DM 只有一条、重新生成复用同一条。
