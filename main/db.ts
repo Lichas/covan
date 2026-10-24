@@ -2,6 +2,7 @@
 // 注意：本模块不 import electron，以便冒烟脚本在纯 Node 下复用。
 // 由 index.ts 调用 initDb(app.getPath('userData')) 完成初始化。
 import { PRESET_AVATARS } from '../shared/presetAvatars'
+import { DEFAULT_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS, MIN_OUTPUT_TOKENS } from '../shared/tokenLimits'
 import {
   isGroupBackground,
   randomGroupBackground,
@@ -50,7 +51,7 @@ export type Db = Database.Database
 
 let db: Db | null = null
 
-const DEFAULT_MAX_TOKENS = 8192
+const DEFAULT_MAX_TOKENS = DEFAULT_OUTPUT_TOKENS
 const DEFAULT_REASONING_EFFORT: Bot['reasoning_effort'] = 'medium'
 const RESPONSE_DECISION_AUTO_MIGRATION = 'response_decision_auto_migrated_v1'
 const DATABASE_FILE = 'covan.db'
@@ -76,7 +77,7 @@ CREATE TABLE IF NOT EXISTS bots (
   provider_id TEXT REFERENCES providers(id),
   model TEXT NOT NULL DEFAULT '',
   temperature REAL NOT NULL DEFAULT 0.7,
-  max_tokens INTEGER NOT NULL DEFAULT 8192,
+  max_tokens INTEGER NOT NULL DEFAULT ${DEFAULT_MAX_TOKENS},
   reasoning_effort TEXT NOT NULL DEFAULT 'medium',
   response_decision_strategy TEXT NOT NULL DEFAULT 'auto',
   workspace_dir TEXT NOT NULL DEFAULT '',
@@ -1013,8 +1014,8 @@ function assertResponseDecisionStrategy(
 }
 
 function assertMaxTokens(value: number): void {
-  if (!Number.isInteger(value) || value < 64 || value > 131072)
-    throw new Error('最大输出 Token 需要是 64–131072 的整数')
+  if (!Number.isInteger(value) || value < MIN_OUTPUT_TOKENS || value > MAX_OUTPUT_TOKENS)
+    throw new Error(`最大输出 Token 需要是 ${MIN_OUTPUT_TOKENS}–${MAX_OUTPUT_TOKENS} 的整数`)
 }
 
 export function deleteBot(id: string): void {

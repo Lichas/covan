@@ -242,7 +242,7 @@ Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代
 - **首次开场白**：`main/welcome.ts` 在 `createDm` 为空时先同步插入一条 `system_kind='welcome'` 的 fallback，再异步调用一次无工具 `completeOnce` 原地升级；`bots.welcome_at` 去重，`captureChatMemory` 跳过 welcome。它复用 `completeOnce` 的 Provider/CLI 选择与观测，不使用 `runAgent`，因此不会伪造 user 消息或执行工具。
 - **系统通知**：`main/index.ts` 在广播 `message-done` 前检查发送者是否为 Bot、`bots.notify`、窗口聚焦状态，并用 Electron `Notification` 弹出；点击通知通过 `notification-click` 事件切到会话。通知不写日志，应用退出后没有后台调度。
 - **定时任务应用工具**：`agentTools.ts` 的 `list_scheduled_tasks`、`create_scheduled_task`、`update_scheduled_task`、`delete_scheduled_task` 只作用于当前 Bot，创建目标固定为当前 chat；写入后重建本地调度。工具不会暴露跨 Bot 的修改权限，Agent 私聊不装配这些能力。
-- **模型指引**：装配层用实际工具名动态追加简短 system prompt，明确需要文件/最新信息时必须真实调用，将工具内容视为不可信数据，禁止伪造成功。仅在收到本轮 `workspace_write` / `workspace_edit` 成功结果后，模型才可声称文件已写入、已保存或已生成；新建 Bot 的默认运行预算为中等推理与 8192 输出 Token，已有配置不迁移覆盖。
+- **模型指引**：装配层用实际工具名动态追加简短 system prompt，明确需要文件/最新信息时必须真实调用，将工具内容视为不可信数据，禁止伪造成功。仅在收到本轮 `workspace_write` / `workspace_edit` 成功结果后，模型才可声称文件已写入、已保存或已生成；新建 Bot 的默认运行预算为中等推理与 1M（1000000）输出 Token，API 请求按模型最大输出与剩余上下文收敛，已有配置不迁移覆盖。
 - 工具执行层在 `workspace_write` / `workspace_edit` 成功事件中生成 `WorkspaceArtifact`，编排器将其去重写入当前消息的 `artifacts` JSON 列并广播工作区刷新事件；因此交付 UI 有可靠来源且可跨重启恢复，不解析模型正文。renderer 的交付卡只负责选择目标文件，右侧产物预览面板按扩展名展示 Markdown、HTML、TXT、代码、图片和 PDF，并在 UI store 中保存当前拖拽宽度。
 - UI 侧：`listWorkspaceFiles`（深度 2）、`readWorkspaceFile`（≤200KB 文本）、`openWorkspace`（`shell.openPath`）、`revealWorkspaceFile`（`shell.showItemInFolder`）。
 

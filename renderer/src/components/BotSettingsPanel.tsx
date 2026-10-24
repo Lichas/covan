@@ -1,6 +1,7 @@
 // components/BotSettingsPanel.tsx — 右栏：Bot 资料 / 记忆 / 工作区
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { Images, SlidersHorizontal, HeartPulse, Brain, FolderOpen, Clock3, Puzzle, type LucideIcon } from 'lucide-react'
+import { DEFAULT_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS, MIN_OUTPUT_TOKENS } from '@shared/tokenLimits'
 import type {
   Bot,
   ChatSummary,
@@ -644,21 +645,21 @@ function ProfileTab({
       <ProfileRow
         id="tokens"
         label="最大输出 Token"
-        hint="新建 Bot 默认 8192；简短聊天可按成本需要调低。"
+        hint={`新建 Bot 默认 ${DEFAULT_OUTPUT_TOKENS}；最高可设 1M（1000000），实际输出受模型与剩余上下文限制。`}
         action={
           <input
             aria-label="最大输出 Token"
             key={`${bot.id}:${bot.max_tokens}`}
             className="w-[84px] shrink-0 rounded-lg border border-stone-200 bg-white px-2 py-1 text-right text-[12px] tabular-nums text-stone-700 dark:border-stone-600 dark:bg-stone-800 dark:text-stone-200"
             type="number"
-            min={64}
-            max={131072}
+            min={MIN_OUTPUT_TOKENS}
+            max={MAX_OUTPUT_TOKENS}
             step={64}
             defaultValue={bot.max_tokens}
             onBlur={(event) => {
               const value = Math.max(
-                64,
-                Math.min(131072, Math.round(Number(event.target.value) || 8192)),
+                MIN_OUTPUT_TOKENS,
+                Math.min(MAX_OUTPUT_TOKENS, Math.round(Number(event.target.value) || DEFAULT_OUTPUT_TOKENS)),
               )
               event.target.value = String(value)
               if (value !== bot.max_tokens) save({ max_tokens: value })

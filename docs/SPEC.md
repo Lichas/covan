@@ -76,7 +76,7 @@ CREATE TABLE bots (
   provider_id TEXT REFERENCES providers(id),
   model TEXT NOT NULL DEFAULT '',    -- 空 = 用 provider 默认
   temperature REAL NOT NULL DEFAULT 0.7,
-  max_tokens INTEGER NOT NULL DEFAULT 8192,
+  max_tokens INTEGER NOT NULL DEFAULT 1000000, -- 输出预算可配置 64–1000000（1M）
   reasoning_effort TEXT NOT NULL DEFAULT 'medium', -- off|low|medium|high|xhigh
   response_decision_strategy TEXT NOT NULL DEFAULT 'auto', -- auto|llm|jev
   backend TEXT NOT NULL DEFAULT 'api',    -- api|codex-cli|claude-cli
@@ -360,6 +360,8 @@ type CovanEvent =
 
 普通 Agent 若 Provider 以 `stop_reason=length` 结束且可见正文为空，不得写入 `done` 空白消息；消息标记为失败并提示输出 Token 被推理耗尽。已有部分正文时仍保留部分结果。观测事件同时记录上下文窗口、输入上下文占比、输出预算占比、推理占输出比和可见字符数，以区分输入上下文超限与输出预算耗尽。
 
+Bot 的最大输出预算支持 64–1000000（1M）的整数，新建 Bot 默认 1M；设置页、创建与更新接口使用同一范围。普通 API Agent 与内部 completion 在请求前取配置预算（内部用途有显式预算时优先）和 SDK 模型声明最大输出的较小值，SDK 再按剩余上下文收敛；保存的 Bot 配置不随请求调整。1M 表示输出预算配置，不代表模型上下文或服务端承诺的输出能力；已有 Bot 的保存值保持不变。
+
 普通 Agent 生成不再把最新用户消息预填进历史后调用 `agent.continue()`；历史只初始化到上一条消息，最新的 user/toolResult 通过 `agent.prompt(message)` 显式开始本轮，兼容要求本轮必须存在 user query 的 LM Studio Jinja 模板。
 
 ### 5.1 定时 Agent 任务（scheduledTasks.ts）
@@ -378,7 +380,7 @@ type CovanEvent =
 - 普通回复和定时任务的 Agent 调用携带消息 ID 与同轮 trace ID；记录 Provider 请求序号、状态和耗时，首段文字耗时，工具序号/名称/输入输出字符数/成败/归一化错误类别/HTTP 状态/耗时，每个模型步骤的 Token 用量及停止原因。所有 `completeOnce` 调用记录开始、payload 摘要、响应、结束或失败、模型参数与用量；已标注群聊判断、续发、记忆摘要、上下文摘要和头像提示等用途。群聊每次 REPLY/SKIP、强制回复、失败降级和过期重试均有事件。工具参数、返回内容、推理正文均不记入日志。
 - 定时器记录启动/停止、计划恢复、下次触发时间、定时/手动触发、重复运行跳过、执行完成/失败、错过单次任务和恢复失败；每次执行关联匿名 task ID 和 trace ID，并与其投递的 Bot 消息共享 trace ID。任务标题、指令和原始异常文本不入观测日志。
 - Debug 显示日志关闭、缺失、轮转、旧版未关联或消息生成态残留等证据限制；开启日志只影响之后的调用，无法补回历史。模型配置标明为当前值，历史执行参数以事件为准。
-- IPC `analyzeDiagnostic(reference, botId): Promise<string>` 在主进程重新采集报告，通过所选 Bot 当前 Provider/模型执行独立 completion，沿用其推理强度、输出上限和温度（新 Bot 默认 medium / 8192），120 秒超时；无工具、无人设/聊天/记忆注入，不落入聊天记录。全局只允许一个分析，`cancelDiagnostic()` 取消分析，离开 Debug 页也取消。空正文、输出截断、网络、鉴权、限流、配置及服务错误分类返回中文建议，取消与超时分别显示，不透传 Provider 原始错误。
+- IPC `analyzeDiagnostic(reference, botId): Promise<string>` 在主进程重新采集报告，通过所选 Bot 当前 Provider/模型执行独立 completion，沿用其推理强度、输出上限和温度（新 Bot 默认 medium / 1M，实际请求受模型最大输出与剩余上下文限制），120 秒超时；无工具、无人设/聊天/记忆注入，不落入聊天记录。全局只允许一个分析，`cancelDiagnostic()` 取消分析，离开 Debug 页也取消。空正文、输出截断、网络、鉴权、限流、配置及服务错误分类返回中文建议，取消与超时分别显示，不透传 Provider 原始错误。
 - 分析使用独立 `diagnostic_id`，开启本地日志时记录 `diagnostic.*` 开始、HTTP 响应、结束原因/Token 用量、完成或失败及耗时；关联源消息但以 `phase=diagnostic` 区分，不改变源消息状态。失败提示携带分析编号，刷新报告可查询；不记录分析正文和原始错误。Debug 分别显示源回复当前配置和诊断 Bot 的实际 Provider、模型及预算，隐藏 Electron IPC 错误包装。页面说明发送的数据范围和服务额度，并区分模型推测与证据。
 
 ### 5.3 引用草稿

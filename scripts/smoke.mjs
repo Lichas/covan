@@ -932,11 +932,25 @@ const botC = db.createBot({
 })
 const kimiBot = db.createBot({ name: 'Kimi Bot', provider_id: kimi.id })
 assert(botB.reasoning_effort === 'medium', '普通 Bot 默认使用中等推理')
-assert(botB.max_tokens === 8192, '普通 Bot 默认最大输出为 8192 Token')
+assert(botB.max_tokens === 1_000_000, '普通 Bot 默认最大输出为 1M Token')
 assert(botB.response_decision_strategy === 'auto', 'Bot 默认自动优先使用可用的 Jev 响应决策')
 assert(kimiBot.reasoning_effort === 'medium', 'Kimi Bot 默认也使用中等推理')
-assert(kimiBot.max_tokens === 8192, 'Kimi Bot 默认最大输出为 8192 Token')
+assert(kimiBot.max_tokens === 1_000_000, 'Kimi Bot 默认最大输出为 1M Token')
 db.deleteBot(kimiBot.id)
+const largeBudgetBot = db.createBot({ name: '1M 输出预算', provider_id: provider.id, max_tokens: 1_000_000 })
+assert(largeBudgetBot.max_tokens === 1_000_000, '新建 Bot 可保存 1M 输出预算')
+db.updateBot(largeBudgetBot.id, { max_tokens: 8192 })
+db.updateBot(largeBudgetBot.id, { description: '保留旧预算' })
+assert(db.getBot(largeBudgetBot.id).max_tokens === 8192, '默认值改为 1M 后，已有 Bot 的 8192 配置保持不变')
+db.updateBot(largeBudgetBot.id, { max_tokens: 64 })
+db.updateBot(largeBudgetBot.id, { max_tokens: 1_000_000 })
+assert(db.getBot(largeBudgetBot.id).max_tokens === 1_000_000, '编辑 Bot 可保存 1M 输出预算')
+for (const value of [63, 1_000_001, 64.5, NaN, Infinity]) {
+  let rejected = false
+  try { db.updateBot(largeBudgetBot.id, { max_tokens: value }) } catch { rejected = true }
+  assert(rejected && db.getBot(largeBudgetBot.id).max_tokens === 1_000_000, `拒绝非法输出预算 ${value} 且保留原配置`)
+}
+db.deleteBot(largeBudgetBot.id)
 for (const bot of [botA, botB, botC])
   db.updateBot(bot.id, { response_decision_strategy: 'llm' })
 assert(db.listBots().length === 3, '3 个 bot 已创建')
@@ -1313,6 +1327,19 @@ console.log('\n[4a-cli] CLI Bot 压缩摘要使用 Provider 默认模型')
     bots.push(apiBot)
     await agentRuntime.completeOnce(apiBot, '概括目标', '目标已确认', { reasoning: 'off' })
     assert(requests.at(-1).model === 'api-custom-model', 'API Bot 的自选模型不被 Provider 默认模型覆盖')
+    const largeApiBot = db.updateBot(apiBot.id, { max_tokens: 1_000_000 })
+    await agentRuntime.completeOnce(largeApiBot, '本地预算回归', '验证模型上限', { reasoning: 'off' })
+    assert(requests.at(-1).max_tokens === 131072, '内部 completion 将 1M 配置限制到模型声明的最大输出')
+    await agentRuntime.completeOnce(largeApiBot, '本地预算回归', '验证用途预算', { reasoning: 'off', maxTokens: 1024 })
+    assert(requests.at(-1).max_tokens === 1024, '内部摘要等用途仍遵守显式的小输出预算')
+    let streamDone = false
+    let streamError = ''
+    await agentRuntime.runAgent('local-budget-regression', largeApiBot,
+      [{ role: 'user', content: '验证流式输出预算', timestamp: Date.now() }],
+      { onDelta() {}, onDone() { streamDone = true }, onError(error) { streamError = error } },
+    )
+    assert(streamDone && !streamError && requests.at(-1).max_tokens === 131072, '普通流式 Agent 同样限制到模型最大输出并正常完成')
+    assert(db.getBot(apiBot.id).max_tokens === 1_000_000, '请求预算适配不改写用户保存的 1M 配置')
     const cliBot = bots[0]
     db.saveProvider({ ...provider, default_model: '' })
     const failedChat = db.createDm(cliBot.id)

@@ -403,6 +403,16 @@ try {
   await expect(commandSummary).toContainText('温柔的开发伙伴')
   console.log('✓ Persona System Prompt summary row, highlighted editor, cancel/finish flow')
   await page.getByRole('group', { name: '推理强度' }).getByRole('button', { name: '低', exact: true }).click()
+  await expect(page.getByLabel('最大输出 Token')).toHaveAttribute('max', '1000000')
+  await expect(page.getByLabel('最大输出 Token')).toHaveValue('1000000')
+  await page.getByLabel('最大输出 Token').fill('1000000')
+  await page.getByLabel('最大输出 Token').press('Tab')
+  await expect.poll(async () => {
+    const bots = await page.evaluate(() => window.covan.listBots())
+    return bots.find((item) => item.name === '开发伙伴')?.max_tokens
+  }).toBe(1_000_000)
+  await expect(page.getByLabel('最大输出 Token')).toHaveValue('1000000')
+  console.log('✓ 1M output budget persists through the settings UI and IPC')
   await page.getByLabel('最大输出 Token').fill('512')
   await page.getByLabel('最大输出 Token').press('Tab')
   await expect.poll(async () => {
@@ -987,7 +997,7 @@ try {
   const diagnosisRequest = requests.find((r) => JSON.stringify(r.body.messages?.[0] ?? '').includes('你是 Covan 执行诊断助手。'))
   assert.ok(diagnosisRequest)
   assert.ok(!diagnosisRequest.body.tools?.length)
-  assert.equal(diagnosisRequest.body.max_tokens, 8192)
+  assert.equal(diagnosisRequest.body.max_tokens, 131072)
   assert.doesNotMatch(JSON.stringify(diagnosisRequest.body), /请改名为小蓝|文件工具已连通|蓝色机器人|COVAN_BROWSER_JS_OK/)
   const updatedReport = await page.evaluate((ref) => window.covan.getDiagnosticReport(ref), debugRef)
   assert.equal(updatedReport.message.status, report.message.status)

@@ -658,7 +658,7 @@ async function runPiAgent(
           // Kimi k3 rejects any explicit temperature other than 1.
           temperature:
             provider.kind === 'kimi' && m.id === 'k3' ? 1 : bot.temperature,
-          maxTokens: bot.max_tokens,
+          maxTokens: Math.min(bot.max_tokens, m.maxTokens),
         }),
       sessionId: `${chatId}:${bot.id}`,
       getApiKey: async () => apiKey || undefined,
@@ -963,7 +963,7 @@ export async function completeOnce(
           options.onResponseStatus?.(response.status)
           observe('completion.response.received', { ...callScope, status, duration_ms: Date.now() - startedAt })
         },
-        maxTokens: options.maxTokens ?? bot.max_tokens,
+        maxTokens: Math.min(options.maxTokens ?? bot.max_tokens, model.maxTokens),
         temperature:
           provider.kind === 'kimi' && model.id === 'k3'
             ? 1

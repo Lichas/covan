@@ -117,6 +117,7 @@ Covan 的机会在于：**同一套「Bot（人设 + 记忆 + 工作区 + 模型
 
 **FR-BOT-03 编辑 Bot（P0）**
 - Given 用户在单聊中打开右侧 BotSettingsPanel，When 修改名称/标签/描述/人设/模型/温度/通知开关，Then 变更即时保存并广播 `bot-updated` 事件，后续对话立即生效。
+- Given 用户编辑最大输出 Token，When 保存 64–1000000（1M）内的整数，Then 设置可持久保存，实际 API 请求遵守模型最大输出和剩余上下文限制；界面说明配置预算与实际可输出量的区别。
 - Given 用户在设定页查看人设 System Prompt，Then 默认看到已渲染的 Markdown 预览；When 点击铅笔，Then 进入至少 360px 高的编辑器并显示标题、代码围栏、行内代码、强调、链接和注释的语法高亮；When 点击完成，Then 保存修改并返回预览；点击取消则丢弃草稿。
 
 **FR-BOT-04 删除 Bot（P1）**
@@ -272,7 +273,7 @@ Covan 的机会在于：**同一套「Bot（人设 + 记忆 + 工作区 + 模型
 
 **FR-PRV-03 Bot 级模型覆盖（P0）**
 - Given Bot 设置面板，When 用户为 Bot 指定 provider 与模型（留空则用 provider 默认模型）及 temperature、max_tokens，Then 该 Bot 的所有生成使用此配置。
-- Given 用户新建 Bot 且不调整模型设置，When Bot 被创建，Then 默认推理强度为「中」、最大输出为 8192 Token；已有 Bot 的已保存值不自动变更。
+- Given 用户新建 Bot 且不调整模型设置，When Bot 被创建，Then 默认推理强度为「中」、最大输出预算为 1M（1000000）Token，实际 API 请求按模型上限调整；已有 Bot 的已保存值不自动变更。
 
 **FR-PRV-04 Mock Provider（P0，可测试性）**
 - Given 开发/冒烟环境，When provider kind='mock'，Then 不走真实 LLM，按模板生成流式假回复，`npm run smoke` 依赖其完成端到端验证。
