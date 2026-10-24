@@ -51,7 +51,7 @@ const invalid = [
 
 const gallery = [
   '```openui-lang',
-  'root = Card("内容组件", [callout, tag, list, steps, sep, stack, tabs, accordion])',
+  'root = Card("内容组件", [callout, tag, list, steps, sep, stack, variants, tabs, accordion])',
   'callout = Callout("info", "提示", "这是一条提示")',
   'tag = Tag("标签", "accent")',
   'list = List(["一", "二"], true)',
@@ -59,6 +59,10 @@ const gallery = [
   'step = StepsItem("第一步", "详情", "done")',
   'sep = Separator("分组")',
   'stack = Stack([tag, callout], "row", "s")',
+  'variants = Stack([warn, ok, err], "column", "s")',
+  'warn = Callout("warning", "预算偏紧", "提示正文回到可读字号，不再靠左侧色条加重。")',
+  'ok = Callout("success", "已保存", "成功提示同样由图标和淡填充表达。")',
+  'err = Callout("error", "连接失败", "错误提示保留正文级对比度。")',
   'tabs = Tabs([tab, tab2])',
   'tab = TabItem("a", "标签页", [text])',
   'tab2 = TabItem("b", "第二页", [text2])',
@@ -243,16 +247,21 @@ try {
   await accordionTrigger.click()
   await expect(accordionTrigger).toHaveAttribute('aria-expanded', 'false')
   for (const [selector, count] of [
-    ['.genui-callout', 2],
+    ['.genui-callout', 5],
     ['.genui-tag', 2],
     ['.genui-list', 1],
     ['.genui-steps', 1],
     ['.genui-separator', 1],
-    ['.genui-stack', 1],
+    ['.genui-stack', 2],
     ['.genui-tabs', 1],
     ['.genui-accordion', 1],
   ]) {
     await expect(page.locator(selector)).toHaveCount(count)
+  }
+  for (const variant of ['info', 'success', 'warning', 'error']) {
+    const callout = page.locator(`.genui-callout-${variant}`).first()
+    await expect(callout).toBeVisible()
+    await expect(callout.locator('.genui-callout-icon')).toHaveAttribute('aria-hidden', 'true')
   }
   for (const selector of ['.genui-line-chart.is-area', '.genui-pie-chart', '.genui-radar-chart', '.genui-radial-chart', '.genui-scatter-chart']) {
     await expect(page.locator(selector)).toHaveCount(1)

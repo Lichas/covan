@@ -660,35 +660,51 @@
 
 .genui-callout {
   --callout: var(--accent);
+  --callout-ink: var(--accent);
   display: grid;
-  gap: 3px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--callout) 22%, var(--line));
-  border-left: 3px solid var(--callout);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--callout) 7%, transparent);
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 8px;
+  row-gap: 4px;
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--callout) 16%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--callout) 6%, transparent);
 }
 
-.genui-callout-success { --callout: #16a34a; }
-.genui-callout-warning { --callout: #d97706; }
-.genui-callout-error { --callout: #dc2626; }
-.dark .genui-callout-success { --callout: #4ade80; }
-.dark .genui-callout-warning { --callout: #fbbf24; }
-.dark .genui-callout-error { --callout: #f87171; }
+.genui-callout-success { --callout: #16a34a; --callout-ink: #15803d; }
+.genui-callout-warning { --callout: #d97706; --callout-ink: #b45309; }
+.genui-callout-error { --callout: #dc2626; --callout-ink: #b91c1c; }
+.dark .genui-callout-success { --callout: #4ade80; --callout-ink: #86efac; }
+.dark .genui-callout-warning { --callout: #fbbf24; --callout-ink: #fcd34d; }
+.dark .genui-callout-error { --callout: #f87171; --callout-ink: #fca5a5; }
 
-.genui-callout strong {
+.genui-callout-icon {
+  grid-row: 1 / span 2;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  color: var(--callout-ink);
+}
+
+.genui-callout > strong {
+  grid-column: 2;
   color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.45;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
-.genui-callout p {
+.genui-callout > p {
+  grid-column: 2;
   margin: 0;
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.55;
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+  font-size: 12.5px;
+  line-height: 1.6;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .genui-tag {

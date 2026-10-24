@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from 'react'
 import type { ElementNode } from '@openuidev/react-lang'
+import { CircleCheck, CircleX, Info, TriangleAlert } from 'lucide-react'
 
 type RenderNode = (value: unknown) => ReactNode
 type TabItemProps = { value: string; trigger: string; content: ElementNode[] }
@@ -113,8 +114,22 @@ export function StepsView({ items }: { items: ElementNode[] }) {
   )
 }
 
+const CalloutIcons = {
+  info: Info,
+  success: CircleCheck,
+  warning: TriangleAlert,
+  error: CircleX,
+} as const
+
 export function CalloutView({ variant, title, text }: CalloutProps) {
-  return <aside className={`genui-callout genui-callout-${variant}`} role="note"><strong>{title}</strong><p>{text}</p></aside>
+  const Icon = CalloutIcons[variant]
+  return (
+    <aside className={`genui-callout genui-callout-${variant}`} role="note">
+      <Icon className="genui-callout-icon" aria-hidden="true" />
+      <strong>{title}</strong>
+      <p>{text}</p>
+    </aside>
+  )
 }
 
 export function TagView({ text, tone = 'neutral' }: TagProps) {
