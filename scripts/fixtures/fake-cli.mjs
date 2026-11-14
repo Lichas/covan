@@ -66,6 +66,7 @@ const sandboxIndex = args.indexOf('--sandbox')
 const modeIndex = args.indexOf('--permission-mode')
 const modelIndex = dialect === 'claude' ? args.indexOf('--model') : args.indexOf('-m')
 logCall({
+  cwd: process.cwd(),
   dialect,
   isResume,
   prompt,
@@ -74,6 +75,9 @@ logCall({
   model: modelIndex >= 0 ? args[modelIndex + 1] : '',
   imageCount: args.filter((arg) => arg === '-i').length,
 })
+
+const delay = Math.min(5000, Math.max(0, Number(process.env.COVAN_FAKE_CLI_DELAY_MS) || 0))
+if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
 
 if (modelIndex >= 0 && args[modelIndex + 1] === 'gpt-6-luna') {
   const message = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account." } })

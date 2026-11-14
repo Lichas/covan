@@ -2501,3 +2501,13 @@ kbd {
     min-height: 220px;
   }
 }
+
+/* Mixed message attachments retain image lightboxes and offer bounded text previews. */
+.chat-document { display: flex; align-items: center; gap: 10px; max-width: 320px; min-width: 160px; padding: 10px 14px; border: 1px solid rgba(120,140,160,.24); border-radius: 12px; background: rgba(140,170,200,.08); text-align: left; color: inherit; }
+.chat-document:hover { background: rgba(140,170,200,.16); }
+.chat-document-type { font-size: 11px; font-weight: 600; opacity: .65; }
+.chat-document-info { display: grid; gap: 3px; min-width: 0; }
+.chat-document-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.chat-document-info small, .document-preview-hint { font-size: 12px; opacity: .7; }
+.composer-document { position: relative; padding-right: 8px; }
+.document-preview { max-height: 65vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.8 ui-monospace, monospace; margin-top: 12px; }

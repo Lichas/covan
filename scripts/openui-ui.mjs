@@ -82,6 +82,22 @@ const gallery = [
   '```',
 ].join('\n')
 
+const goalsUi = (goalId) => [
+  '```openui-lang',
+  'root = Card("目标", [detail, board])',
+  `detail = GoalDetail("${goalId}")`,
+  'board = GoalsBoard()',
+  '```',
+].join('\n')
+
+const agentHomeUi = [
+  '```openui-lang',
+  'root = Card("主页来自 Agent", [intro, goals])',
+  'intro = Callout("info", "界面助手", "这是该 Agent 生成并持久化的主页布局。")',
+  'goals = GoalsBoard()',
+  '```',
+].join('\n')
+
 const textOf = (content) =>
   typeof content === 'string'
     ? content
@@ -110,10 +126,16 @@ const server = http.createServer(async (req, res) => {
     requests.push({ url: req.url, system, userText, stream: body.stream })
 
     let content = '收到，这是普通 Markdown 回复。'
-    if (system.includes('## 可选交互式回复') && /canonical|legacy|invalid|gallery/.test(userText)) {
+    if (system.includes('<<agent-home>>')) {
+      content = agentHomeUi
+    } else if (system.includes('## 可选交互式回复') && /canonical|legacy|invalid|gallery|goal-ui/.test(userText)) {
       if (userText.includes('legacy')) content = legacy
       else if (userText.includes('invalid')) content = invalid
       else if (userText.includes('gallery')) content = gallery
+      else if (userText.includes('goal-ui')) {
+        const goalId = userText.match(/[0-9a-f]{8}-[0-9a-f-]{27,}/i)?.[0]
+        content = goalId ? goalsUi(goalId) : '目标 ID 缺失。'
+      }
       else if (userText.includes('canonical')) content = canonical
     }
 
@@ -214,7 +236,7 @@ try {
   await themeDock.getByRole('button', { name: '切换到浅色主题' }).click()
   await expect(page.locator('html')).not.toHaveClass(/dark/)
   assert.equal(
-    await page.evaluate((id) => window.covan.listMessages(id).then((messages) => messages.filter((message) => message.sender_type === 'bot' && message.status === 'done').length), fixture.chat.id),
+    await page.evaluate((id) => window.covan.listMessages(id).then((messages) => messages.filter((message) => message.sender_type === 'bot' && message.status === 'done' && message.system_kind !== 'welcome').length), fixture.chat.id),
     1,
     '选择只填入草稿，不直接发送消息',
   )
@@ -276,10 +298,10 @@ try {
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.locator('.genui-fallback')).toContainText('暂时无法显示此界面', { timeout: 20000 })
   await expect(page.locator('.genui-fallback summary')).toContainText('查看界面源码')
-  await expect(page.locator('article.message-bot[data-status="done"]')).toHaveCount(4)
+  await expect(page.locator('article.message-bot[data-status="done"]:not([data-system-kind="welcome"])')).toHaveCount(4)
 
   const stored = await page.evaluate((id) => window.covan.listMessages(id), fixture.chat.id)
-  const botMessages = stored.filter((message) => message.sender_type === 'bot' && message.status === 'done')
+  const botMessages = stored.filter((message) => message.sender_type === 'bot' && message.status === 'done' && message.system_kind !== 'welcome')
   assert.equal(botMessages.length, 4)
   assert.ok(botMessages[0].content.includes('```openui-lang'))
   assert.ok(botMessages[1].content.includes('```openui\n'))
@@ -287,8 +309,37 @@ try {
   assert.ok(botMessages[3].content.includes('Query('))
   await page.screenshot({ path: path.join(artifacts, 'canonical-legacy-fallback.png') })
 
+  // Goals cards only read real local records and execute a write after a
+  // direct user click. The model output holds an ID from a real tool/API result.
+  const goal = await page.evaluate(async (chatId) => window.covan.createGoal({
+    title: 'OpenUI 目标回归', category: 'PRODUCTIVITY', sessionId: chatId,
+  }), fixture.chat.id)
+  await composer.fill(`goal-ui ${goal.id}`)
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  const goalCard = page.locator('.goal-detail-card').last()
+  await expect(goalCard).toContainText('OpenUI 目标回归', { timeout: 20000 })
+  await expect(page.locator('.goals-board').last()).toContainText('OpenUI 目标回归')
+  await goalCard.getByRole('button', { name: '暂停', exact: true }).click()
+  await expect(goalCard).toContainText('已暂停')
+  await goalCard.getByRole('button', { name: '删除', exact: true }).click()
+  await expect(goalCard.locator('.goal-delete-card')).toContainText('确认删除')
+  await page.screenshot({ path: path.join(artifacts, 'goals-card.png') })
+
+  // A Bot's full-page home is generated through the same validator, stored per
+  // Bot, and can embed a live GoalsBoard without putting goal data in OpenUI.
+  await page.getByRole('button', { name: '展开设置', exact: true }).click()
+  const settingsPanel = page.getByRole('complementary', { name: 'Bot 设定' })
+  await expect(settingsPanel).toBeVisible()
+  await settingsPanel.getByRole('button', { name: '打开主页', exact: true }).click()
+  const home = page.getByRole('main', { name: '界面助手 的主页' })
+  await expect(home).toBeVisible()
+  await expect(home.locator('.genui-card')).toContainText('主页来自 Agent', { timeout: 20000 })
+  await expect(home.locator('.goals-board')).toContainText('OpenUI 目标回归')
+  await home.getByRole('button', { name: '返回聊天', exact: true }).click()
+  await expect(composer).toBeVisible()
+
   assert.deepEqual(errors, [])
-  console.log('✓ SDK openui-lang prompt, extended display/chart set, tab/accordion state, legacy history, draft staging, reload recovery and local fallback')
+  console.log('✓ SDK openui-lang prompt, extended display/chart set, goals cards, Agent home, tab/accordion state, legacy history, draft staging, reload recovery and local fallback')
   console.log('OpenUI UI regression passed. Screenshots: ' + artifacts)
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(artifacts, 'failure.png') }).catch(() => {})

@@ -2,6 +2,90 @@
 
 export interface WorkspaceHtmlPreview { id: string; url: string }
 
+export interface BrowserApproval {
+  id: string
+  action: string
+  summary: string
+  origin: string
+  details: string[]
+  expiresAt: number
+}
+export type BrowserBackend = 'embedded' | 'local-chrome'
+export interface BrowserTask {
+  id: string
+  chatId: string
+  messageId: string
+  backend: BrowserBackend
+  label: string
+  status: 'live' | 'ended' | 'interrupted'
+  startedAt: number
+}
+export interface BrowserFrame {
+  id: string
+  taskId: string
+  capturedAt: number
+  width: number
+  height: number
+  dataUrl: string
+}
+export type BrowserInput =
+  | { type: 'click'; x: number; y: number }
+  | { type: 'scroll'; x: number; y: number; deltaX: number; deltaY: number }
+  | { type: 'text'; text: string }
+  | { type: 'key'; key: string }
+export type BrowserPolicy = 'auto' | 'confirm'
+export interface BrowserHandoff {
+  id: string
+  kind: 'login' | 'verification' | 'control'
+  reason: string
+  origin: string
+  chatId: string
+  messageId?: string
+  expiresAt: number
+}
+export interface BrowserDownload {
+  id: string
+  name: string
+  status: 'pending' | 'downloading' | 'done' | 'cancelled' | 'error'
+  bytes: number
+  relPath?: string
+}
+export interface BrowserActivity {
+  id: string
+  action: string
+  status: 'done' | 'denied' | 'error' | 'interrupted'
+  at: number
+}
+export interface BrowserState {
+  botId: string
+  botName: string
+  backend: BrowserBackend
+  availableBackends: { id: BrowserBackend; label: string }[]
+  tasks: BrowserTask[]
+  currentTaskId: string | null
+  opened: boolean
+  mode: 'human' | 'agent'
+  policy: BrowserPolicy
+  url: string
+  title: string
+  busy: boolean
+  notice: string
+  pending: BrowserApproval | null
+  handoff: BrowserHandoff | null
+  downloads: BrowserDownload[]
+  activities: BrowserActivity[]
+}
+export type BrowserCommand =
+  | { action: 'open'; url: string }
+  | { action: 'snapshot' }
+  | { action: 'click'; snapshotId: string; ref: string }
+  | { action: 'fill'; snapshotId: string; fields: { ref: string; value: string }[] }
+  | { action: 'select'; snapshotId: string; ref: string; value: string }
+  | { action: 'upload'; snapshotId: string; ref: string; paths: string[] }
+  | { action: 'wait'; milliseconds?: number }
+  | { action: 'downloads' }
+  | { action: 'handoff'; kind?: 'login' | 'verification'; reason?: string }
+
 export type ProviderKind =
   | 'openai'
   | 'anthropic'
@@ -231,6 +315,15 @@ export interface Attachment {
   path: string
   name: string
   mime: string
+  kind?: 'image' | 'document'
+  size?: number
+  pages?: number
+  truncated?: boolean
+}
+
+export interface ChatDocumentPreview {
+  attachment: Attachment
+  text: string
 }
 
 export interface WorkspaceArtifact {
@@ -242,6 +335,11 @@ export interface WorkspaceArtifact {
 }
 
 export interface Message {
+  /** 后台目标结果，不占用普通聊天输入锁；由主进程关联。 */
+  goal_execution_id?: string
+  /** 主进程保存的任务补充来源；与后台 Bot 结果分开。 */
+  goal_input_execution_id?: string
+  goal_input_delivery?: 'pending' | 'delivered' | 'unavailable'
   id: string
   chat_id: string
   sender_type: SenderType
@@ -502,6 +600,168 @@ export interface ScheduledTaskInput {
   enabled?: boolean
 }
 
+// ---------- Goals ----------
+
+/** A user's long-running goal. Goals are shared by every Bot in one local profile. */
+export type GoalStatus = 'ACTIVE' | 'PAUSED' | 'RETIRED' | 'COMPLETED'
+export type GoalSource = 'user_goal' | 'assistant_tracking'
+export type GoalCategory =
+  | 'HEALTH'
+  | 'RELATIONSHIPS'
+  | 'MONEY'
+  | 'CAREER'
+  | 'INTERESTS'
+  | 'PRODUCTIVITY'
+  | 'SOMETHING_ELSE'
+
+export type GoalArtifact =
+  | { type: 'cron'; id: string; title: string; schedule: string; status: string }
+  | { type: 'document'; id: string; title: string; path: string }
+  | { type: 'space'; id: string; title: string; slug: string }
+
+export type GoalUpdateKind =
+  | 'note'
+  | 'created'
+  | 'renamed'
+  | 'status_changed'
+  | 'assignment_changed'
+  | 'artifact_attached'
+  | 'reordered'
+
+export interface GoalUpdate {
+  id: string
+  text: string
+  createdAt: string
+  kind: GoalUpdateKind
+  actorKind: 'user' | 'agent' | 'system'
+  authorAgentId: string | null
+  authorName?: string
+  sessionId?: string
+}
+
+export interface Goal {
+  id: string
+  title: string
+  summary?: string
+  description?: string
+  emoji?: string
+  imageUrl?: string
+  status: GoalStatus
+  source: GoalSource
+  category?: GoalCategory
+  parentGoalId: string | null
+  /** list_goals only includes this field when explicitly requested by the detail view. */
+  subGoals?: Goal[]
+  sortOrder: number
+  fixedPosition: number | null
+  /** Undefined means the user has not set a momentum value. */
+  momentum?: number
+  sessionId?: string
+  sessionIds: string[]
+  isThread: boolean
+  ownerAgentId: string | null
+  collaboratorAgentIds: string[]
+  lastTouchedByAgentId: string | null
+  artifacts?: GoalArtifact[]
+  updates?: GoalUpdate[]
+  version: number
+  createdAt: string
+  updatedAt: string
+  execution?: GoalExecution
+}
+
+export interface GoalExecutionInput {
+  sourceMessageId?: string
+  replyToMessageId?: string
+  id: string
+  text: string
+  delivered: boolean
+  createdAt: number
+}
+
+export type GoalExecutionStatus = 'queued' | 'running' | 'waiting_experts' | 'waiting_input' | 'paused' | 'blocked' | 'review' | 'done' | 'error' | 'stopped'
+export type GoalExecutionAction = 'pause' | 'resume' | 'stop' | 'accept'
+
+export interface GoalExecution {
+  reason?: string
+  queuePosition?: number
+  attempt?: number
+  activeMs?: number
+  startedAt?: number | null
+  updatedAt?: number
+  parentExecutionId?: string
+  goalTitle?: string
+  botName?: string
+  inputs?: GoalExecutionInput[]
+  id: string
+  goalId: string
+  botId: string
+  chatId: string
+  messageId: string | null
+  status: GoalExecutionStatus
+  error: string
+  createdAt: number
+  finishedAt: number | null
+}
+
+export interface GoalsListResponse {
+  goals: Goal[]
+  nextCursor: string | null
+}
+
+export interface GoalListOptions {
+  source?: GoalSource
+  status?: GoalStatus[]
+  limit?: number
+  cursor?: string
+}
+
+export interface GoalCreateInput {
+  title: string
+  summary?: string
+  description?: string
+  emoji?: string
+  category?: GoalCategory
+  source?: GoalSource
+  parentGoalId?: string | null
+  ownerAgentId?: string | null
+  collaboratorAgentIds?: string[]
+  /** Creation accepts titles only; IDs and fields are generated by the service. */
+  subGoals?: { title: string; emoji?: string }[]
+  sessionId?: string
+}
+
+export interface GoalPatch {
+  title?: string
+  summary?: string
+  description?: string
+  emoji?: string
+  category?: GoalCategory | null
+  status?: GoalStatus
+  momentum?: number | null
+  ownerAgentId?: string | null
+  collaboratorAgentIds?: string[]
+}
+
+export type GoalArtifactInput =
+  | { type: 'cron'; id: string }
+  | { type: 'document'; botId: string; path: string }
+  | { type: 'space'; id: string }
+
+/**
+ * A Bot-owned, persisted OpenUI page. `content` is validated OpenUI source;
+ * it describes layout only. Any live business data, such as GoalsBoard, is
+ * still loaded by its own controlled component through the IPC bridge.
+ */
+export interface AgentHome {
+  botId: string
+  content: string
+  generatedAt: string | null
+  updatedAt: string | null
+  /** True means there is no saved model result and the UI is using a safe local starter page. */
+  isFallback: boolean
+}
+
 export interface AvatarDesign {
   prompt: string
   style: 'portrait' | 'robot' | 'cat' | 'abstract'
@@ -509,6 +769,7 @@ export interface AvatarDesign {
 }
 
 export type CovanEvent =
+  | { type: 'browser-updated'; botId: string }
   | { type: 'user-context-updated' }
   | { type: 'memories-updated'; botId: string }
   | { type: 'agent-thread-updated'; chatId: string; threadId: string }
@@ -544,6 +805,10 @@ export type CovanEvent =
   | { type: 'workspace-updated'; botId: string }
   | { type: 'scheduled-tasks-updated'; taskId?: string }
   | { type: 'fitness-updated'; botId: string }
+  | { type: 'goal-updated'; goalId: string; version: number }
+  | { type: 'goal-deleted'; goalId: string }
+  | { type: 'goals-reordered'; source: GoalSource; parentGoalId: string | null }
+  | { type: 'agent-home-updated'; botId: string }
   | { type: 'notification-click'; chatId: string }
   | { type: 'extensions-updated'; botId?: string }
   | { type: 'system-message'; chatId: string; message: Message }
@@ -571,6 +836,20 @@ export type PrintResult =
   | { status: 'failed'; error: string }
 
 export interface CovanApi {
+  openBrowser(botId: string): Promise<BrowserState>
+  getBrowserState(botId: string): Promise<BrowserState>
+  setBrowserBackend(botId: string, backend: BrowserBackend): Promise<void>
+  getBrowserFrame(botId: string, taskId: string): Promise<BrowserFrame | null>
+  sendBrowserInput(botId: string, taskId: string, frameId: string, input: BrowserInput): Promise<void>
+  takeOverBrowser(botId: string): Promise<void>
+  showBrowserNative(botId: string): Promise<void>
+  navigateBrowser(botId: string, url: string): Promise<void>
+  setBrowserControl(botId: string, mode: 'human' | 'agent'): Promise<void>
+  setBrowserPolicy(botId: string, policy: BrowserPolicy): Promise<void>
+  completeBrowserHandoff(botId: string, id: string, completed: boolean): Promise<void>
+  respondBrowserApproval(botId: string, approvalId: string, approved: boolean): Promise<void>
+  closeBrowser(botId: string): Promise<void>
+  resetBrowserSession(botId: string): Promise<void>
   /** Platform capability only; native vibrancy is configured by the main window. */
   readonly nativeGlass: boolean
   probeLocalCli(kind: LocalCliKind, executablePath?: string): Promise<LocalCliProbe>
@@ -590,6 +869,8 @@ export interface CovanApi {
   analyzeDiagnostic(reference: string, botId: string): Promise<string>
   cancelDiagnostic(): Promise<void>
   importChatImage(name: string, bytes: Uint8Array): Promise<Attachment>
+  importChatAttachment(name: string, bytes: Uint8Array): Promise<Attachment>
+  readChatDocument(path: string): Promise<ChatDocumentPreview>
   getUserProfile(): Promise<UserProfile>
   saveUserProfile(profile: UserProfile): Promise<UserProfile>
   pickUserAvatar(): Promise<UserProfile>
@@ -623,6 +904,30 @@ export interface CovanApi {
   saveFitnessLog(input: FitnessLogInput): Promise<FitnessLog>
   deleteFitnessLog(id: string): Promise<void>
   getFitnessSummary(botId: string, days?: number): Promise<FitnessSummary>
+  getAgentHome(botId: string): Promise<AgentHome>
+  regenerateAgentHome(botId: string): Promise<AgentHome>
+  listGoals(options?: GoalListOptions): Promise<GoalsListResponse>
+  getGoal(id: string): Promise<Goal>
+  runGoalNextStep(id: string, expectedVersion?: number): Promise<GoalExecution>
+  stopGoalExecution(id: string): Promise<void>
+  controlGoalExecution(executionId: string, action: GoalExecutionAction): Promise<GoalExecution>
+  listGoalExecutions(chatId: string): Promise<GoalExecution[]>
+  sendGoalExecutionInput(executionId: string, text: string, requestId: string): Promise<GoalExecutionInput>
+  sendGoalFollowUp(chatId: string, replyToMessageId: string, text: string, requestId: string): Promise<Message>
+  createGoal(input: GoalCreateInput): Promise<Goal>
+  updateGoal(id: string, patch: GoalPatch, expectedVersion?: number): Promise<Goal>
+  deleteGoal(id: string, expectedVersion?: number): Promise<void>
+  addGoalUpdate(id: string, text: string, expectedVersion?: number): Promise<GoalUpdate>
+  attachGoalArtifact(
+    id: string,
+    artifact: GoalArtifactInput,
+    expectedVersion?: number,
+  ): Promise<Goal>
+  reorderGoals(
+    orderedIds: string[],
+    source: GoalSource,
+    parentGoalId?: string | null,
+  ): Promise<void>
   expandAvatarPrompt(botId: string, direction?: string): Promise<AvatarDesign>
   listProviders(): Promise<Provider[]>
   saveProvider(p: ProviderInput): Promise<Provider>

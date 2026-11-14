@@ -406,7 +406,7 @@ export async function runCliAgent(
 ): Promise<void> {
   const kind = cliKindOf(bot)
   const adapter = ADAPTERS[kind]
-  const workspace = ensureWorkspace(bot.id)
+  const workspace = ensureWorkspace(opts.worker?.workspaceId ?? bot.id)
   const env = cliEnvironment()
   const startedAt = Date.now()
   const scope = {
@@ -429,7 +429,7 @@ export async function runCliAgent(
   }
 
   const fingerprint = cliFingerprint(bot)
-  const existingSession = db.getCliSession(bot.id, chatId, fingerprint)
+  const existingSession = opts.worker ? opts.worker.cliSession.id : db.getCliSession(bot.id, chatId, fingerprint)
   const prompt = existingSession
     ? latestUserText(history)
     : bootstrapPrompt(opts.systemPrompt ?? bot.system_prompt, history)
@@ -479,7 +479,7 @@ export async function runCliAgent(
       }
       const rel = path.relative(realRoot, realFile).split(path.sep).join('/')
       if (!rel || rel.startsWith('..')) return
-      const artifact = describeWorkspaceArtifact(bot.id, rel, 'write')
+      const artifact = describeWorkspaceArtifact(bot.id, opts.worker ? `${opts.worker.workspaceId.slice(bot.id.length + 1)}/${rel}` : rel, 'write')
       artifacts.set(artifact.relPath, artifact)
       callbacks.onArtifact?.(artifact)
     } catch {
@@ -497,7 +497,11 @@ export async function runCliAgent(
       {
         onDelta: callbacks.onDelta,
         onSessionId: (id) => {
-          db.saveCliSession(bot.id, chatId, bot.backend, fingerprint, id)
+          if (opts.worker) {
+            opts.worker.cliSession.id = id
+            opts.worker.onCliSession?.(id, fingerprint)
+          }
+          else db.saveCliSession(bot.id, chatId, bot.backend, fingerprint, id)
         },
         onArtifact: emitArtifact,
         onActivity: (activityKind, label) => {

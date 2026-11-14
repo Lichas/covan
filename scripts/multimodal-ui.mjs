@@ -15,6 +15,9 @@ fs.mkdirSync(artifacts, { recursive: true })
 const real = process.argv.includes('--kimi')
 const requests = [],
   errors = []
+const hasImageInput = (request) => request.url === '/v1/chat/completions' && request.body.messages?.some(
+  (message) => Array.isArray(message.content) && message.content.some((part) => part.type === 'image_url'),
+)
 let app, fixture, generatedPng
 const server = http.createServer(async (req, res) => {
   try {
@@ -92,7 +95,7 @@ async function waitAnswer(page, count = 1) {
         page.evaluate(
           async (id) =>
             (await window.covan.listMessages(id)).filter(
-              (m) => m.sender_type === 'bot' && m.status !== 'streaming',
+              (m) => m.sender_type === 'bot' && m.system_kind !== 'welcome' && m.status !== 'streaming',
             ).length,
           fixture.chat.id,
         ),
@@ -103,7 +106,7 @@ async function waitAnswer(page, count = 1) {
     (id) => window.covan.listMessages(id),
     fixture.chat.id,
   )
-  const answer = messages.filter((m) => m.sender_type === 'bot').at(-1)
+  const answer = messages.filter((m) => m.sender_type === 'bot' && m.system_kind !== 'welcome').at(-1)
   assert.equal(answer.status, 'done', answer.error)
   return { messages, answer }
 }
@@ -193,7 +196,7 @@ try {
     .locator('aside')
     .getByRole('button', { name: '多模态测试', exact: true })
     .click()
-  const input = page.getByLabel('选择图片')
+  const input = page.getByLabel('选择附件')
   const files = pictures.map((p, i) => ({
     name: `image-${i + 1}.png`,
     mimeType: 'image/png',
@@ -226,7 +229,7 @@ try {
   )
   if (!real) {
     assert.equal(answer.attachments.length, 2)
-    const first = requests.find((r) => r.url === '/v1/chat/completions').body
+    const first = requests.find(hasImageInput).body
     assert.equal(
       first.messages
         .filter((m) => m.role === 'user')
@@ -280,7 +283,7 @@ try {
     await page.getByRole('button', { name: '发送', exact: true }).click()
     await waitAnswer(page, 2)
     const last = requests
-      .filter((r) => r.url === '/v1/chat/completions')
+      .filter(hasImageInput)
       .at(-1).body
     assert.equal(
       last.messages
@@ -288,18 +291,18 @@ try {
         .filter((p) => p.type === 'image_url').length,
       4,
     )
-    await page.getByLabel('选择图片').setInputFiles([files[0]])
+    await page.getByLabel('选择附件').setInputFiles([files[0]])
     await expect(page.locator('.composer-image')).toHaveCount(1)
     await page.getByRole('button', { name: '发送', exact: true }).click()
     await waitAnswer(page, 3)
-    await page.getByLabel('选择图片').setInputFiles(
+    await page.getByLabel('选择附件').setInputFiles(
       Array.from({ length: 9 }, (_, i) => ({
         ...files[0],
         name: `${i}.png`,
       })),
     )
     await expect(page.getByRole('alert')).toContainText('最多 8')
-    await page.getByLabel('选择图片').setInputFiles({
+    await page.getByLabel('选择附件').setInputFiles({
       name: 'fake.png',
       mimeType: 'image/png',
       buffer: Buffer.from('not an image'),

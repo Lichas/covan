@@ -4,7 +4,9 @@ import { Avatar } from './Avatar'
 import { QuoteIcon, RefreshIcon, WarnIcon, BugIcon } from './icons'
 import { CopyButton } from './CopyButton'
 import { MarkdownContent } from './MarkdownContent'
-import { ChatImage, attachmentUrl } from './ChatImage'
+import { ChatAttachment } from './ChatAttachment'
+import { BrowserTaskCard } from './BrowserPreview'
+import { BrowserLoginCard } from './BrowserLoginCard'
 import { formatFullTime, formatMessageTime } from '../lib/format'
 import { ArtifactCard } from './ArtifactCard'
 import { GenerativeMessage } from './GenerativeMessage'
@@ -55,6 +57,7 @@ export const MessageBubble = memo(function MessageBubble({
       className={`message-row ${isUser ? 'message-user' : 'message-bot'}`}
       data-message-id={message.id}
       data-status={message.status}
+      data-system-kind={message.system_kind || undefined}
       aria-label={`${name}的消息`}
     >
       {!isUser && isGroup && (
@@ -87,7 +90,8 @@ export const MessageBubble = memo(function MessageBubble({
           >
             {formatMessageTime(message.created_at)}
           </time>
-          {streaming && <span className="generation-label">正在回复</span>}
+          {streaming && <span className="generation-label">{message.goal_execution_id ? '后台执行中' : '正在回复'}</span>}
+          {message.goal_input_execution_id && <span className="generation-label">任务补充 · {message.goal_input_delivery === 'delivered' ? '已送达' : message.goal_input_delivery === 'pending' ? '待处理' : '关联已失效'}</span>}
           {message.system_kind === 'welcome' && (
             <span className="generation-label">开场</span>
           )}
@@ -96,10 +100,9 @@ export const MessageBubble = memo(function MessageBubble({
           {message.attachments.length > 0 && (
             <div className="message-images">
               {message.attachments.map((item, i) => (
-                <ChatImage
+                <ChatAttachment
                   key={`${item.path}-${i}`}
-                  src={attachmentUrl(item.path)}
-                  alt={item.name}
+                  attachment={item}
                 />
               ))}
             </div>
@@ -119,6 +122,8 @@ export const MessageBubble = memo(function MessageBubble({
             <span className="text-stone-500">未能完成这次回复</span>
           ) : null}
         </div>
+        {!isUser && bot && <BrowserTaskCard botId={bot.id} messageId={message.id} />}
+        {!isUser && bot && message.status === 'streaming' && <BrowserLoginCard botId={bot.id} messageId={message.id} />}
         {!isUser && bot && message.artifacts.length > 0 && (
           <ArtifactCard
             artifacts={message.artifacts}

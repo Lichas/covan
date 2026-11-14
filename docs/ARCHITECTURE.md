@@ -1,6 +1,6 @@
 # ARCHITECTURE — Covan 技术方案
 
-> 活文档 · 与 [SPEC](SPEC.md) 保持一致；本文档解释已实现能力的技术决策与内部设计，不另行定义产品需求。
+> 活文档 · 与 [SPEC](SPEC.md) 保持一致；本文档解释技术决策与内部设计，不另行定义产品需求；明确标注「待实施」的章节只描述候选方案，不代表当前能力或生效接口。
 
 ## 1. 总览
 
@@ -142,7 +142,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 ### 5.5 AbortController 生命周期
 
 - 主进程维护 `Map<chatId, Set<AbortController>>`（SPEC §8）。每次 `agent.prompt()` 创建 controller 入 set；`agent.abort()` 绑定之。
-- 终态（done/error/stopped）时从 set 移除并置空；`stopChat(chatId)` 遍历该 chat 的 set 逐个 abort，随后清空。
+- 终态（done/error/stopped）时从 set 移除并置空；`stopChat(chatId)` 遍历该 chat 的普通/定时执行 set 逐个 abort，目标任务按 executionId 独立注册和停止。
 - 消息状态机：创建 streaming → abort 时若已有 delta 落库为 stopped（保留已输出内容），若尚无内容则置 error 文案「已停止」；正常完成置 done。
 - 应用退出前统一 abort 全部 set，避免悬挂请求。
 
@@ -220,6 +220,16 @@ Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代
 
 ## 8. 可扩展工具层（workspace.ts + tools/* + agentRuntime.ts）
 
+操作浏览器（2026-10-29）由 `main/browser/tools.ts`、`snapshot.ts` 和 `controller.ts` 分层：工具适配不导入 Electron，可在冒烟环境替换控制器；主进程注入真实控制器，每轮 scope 在 Agent finally 释放。Broker 独占任务 scope、一次性审批和控制权，真实浏览器/CDP/下载由 Adapter 持有；模型只获得快照/引用/受控动作，没有执行任意 JavaScript 或读取 Cookie 的接口。固定的宿主 DOM helper 用于填写、选项和命中校验，模型值仅以数据参数传递。
+
+可信工作台复用 renderer 的独立 `browserBot` 入口和 preload，远程 WebContentsView 没有 preload/Node，拒绝私有/file 协议和原生权限。持久 partition 按 Bot 隔离，应用不读取系统浏览器资料。每个 Bot 同时只允许一个 Agent 轮次占用；scope/epoch/快照目标和上传内容 hash 始终校验；confirm 额外绑定 origin 和一次性审批，auto 不逐项中断。下载事件指定唯一工作区路径；auto 直接保存，confirm 暂停等待批准。完成后真实产物进入现有交付与 Goals 流程。
+
+本轮调研参考 [OpenMuse browser.py](https://github.com/OpenMuseAgent/OpenMuse/blob/76b71309f49e5055d216cc57e41a68ae660e3190/openmuse/tools/browser.py)、[Sentinel 策略](https://github.com/OpenMuseAgent/OpenMuse/blob/76b71309f49e5055d216cc57e41a68ae660e3190/openmuse/sentinel/policy.py) 与 [应用交互](https://github.com/OpenMuseAgent/OpenMuse/blob/main/docs/app.md)：该归档版本把 browser 评为 moderate，默认 ask 只因 sensitive 或其他规则升级而提问，strict 才普遍拦住 moderate；用户接管后从当前页面继续。Muse 官方[设计](https://introducing.muse.ai/)也区分普通浏览与重要事务确认，不能推断其没有 Sentinel。Covan 按用户要求将浏览器动作设为 auto 默认，保留 confirm 作为选择；并未实现 Muse 的完整业务风险/出站数据策略。
+
+`BrowserHandoff` 是主进程内存中的暂停协议，绑定 scope/chat/message 与一次性 ID。快照前的固定检测器只返回挑战类别/原因，不返回输入值；检测不全时可显式调用 browser_handoff。等待时仍保持原 Agent 工具调用，允许用户人工导航登录；完成接口重新检查卡片和挑战状态，恢复 agent 模式并重新采集快照。因此没有伪造用户消息、重新启动 Agent 或重放原点击。卡片是可信 React 组件，通过 browser-updated 拉取真实状态，不是模型生成的审批。停止/关闭/10分钟超时终止等待。执行模式通过已有 settings 按 Bot 保存，不复制 Cookie 或修改 Provider 密钥存储。
+
+`browser_activity` 只持久保存 Bot、动作种类、结果和时间，按 Bot 保留最近 100 条，不保存网页正文、填写值、URL 查询参数、Cookie 或凭据。站点读取授权和待确认操作只在内存中存在，重启后不自动重放。该边界是受控浏览器操作，不是可约束网页全部网络副作用的安全 VM；Mac 系统控制应作为另一种执行器，独立取得权限，不能扩展本浏览器工具为任意系统命令入口。
+
 `extensions/store.ts` 管理 MCP/Skill 目录和两张 Bot 绑定表，所有外键级联删除；`index.ts` 注入系统 safeStorage 编解码器，MCP env/headers 加密后入库，renderer 只见键名。现有 Provider 密钥尚未迁移。
 
 `extensions/mcp.ts` 使用官方 `@modelcontextprotocol/sdk` Client 和三个标准 transport；远程请求使用 Electron net.fetch 继承系统代理。每轮独立连接，服务工具以稳定匿名命名空间转换为 AgentTool；工具结构由 SDK 校验，文本返回限长。连接建立外层还使用 AbortSignal 截止保护，覆盖 SSE transport.start 尚未获得 endpoint 的阶段。Agent finally、取消和应用退出均关闭连接，单服务失败保留基础能力。
@@ -245,6 +255,32 @@ Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代
 - **模型指引**：装配层用实际工具名动态追加简短 system prompt，明确需要文件/最新信息时必须真实调用，将工具内容视为不可信数据，禁止伪造成功。仅在收到本轮 `workspace_write` / `workspace_edit` 成功结果后，模型才可声称文件已写入、已保存或已生成；新建 Bot 的默认运行预算为中等推理与 1M（1000000）输出 Token，API 请求按模型最大输出与剩余上下文收敛，已有配置不迁移覆盖。
 - 工具执行层在 `workspace_write` / `workspace_edit` 成功事件中生成 `WorkspaceArtifact`，编排器将其去重写入当前消息的 `artifacts` JSON 列并广播工作区刷新事件；因此交付 UI 有可靠来源且可跨重启恢复，不解析模型正文。renderer 的交付卡只负责选择目标文件，右侧产物预览面板按扩展名展示 Markdown、HTML、TXT、代码、图片和 PDF，并在 UI store 中保存当前拖拽宽度。
 - UI 侧：`listWorkspaceFiles`（深度 2）、`readWorkspaceFile`（≤200KB 文本）、`openWorkspace`（`shell.openPath`）、`revealWorkspaceFile`（`shell.showItemInFolder`）。
+
+### 浏览器 Adapter 与投流（2026-10-30，已实现）
+
+```mermaid
+flowchart LR
+  Agent[Agent browser tools] --> Broker[Browser Broker · 权限与控制权]
+  Broker --> Embedded[Electron Adapter]
+  Broker --> Local[本机 Chrome Adapter]
+  Broker -. 后续 .-> Remote[沙箱 Adapter]
+  Embedded --> Frames[用户画面帧]
+  Local --> Frames
+  Frames --> Card[聊天卡片与侧栏]
+  Card -->|接管后受控输入| Broker
+```
+
+`main/browser/adapter.ts` 定义 BrowserAdapter（受主进程调用的 CDP、导航、画面采集、人工输入、窗口与生命周期）及 AdapterDownload；`controller.ts` 只保留 Bot/运行独占、审批、登录/控制权等待、引用/上传检查与产物交付。`electronAdapter.ts` 拥有 WebContentsView、partition、原生输入和 DownloadItem；`chromeAdapter.ts` 启动本机 Chrome/Edge 的专用 profile，通过 `cdpPipe.ts` 的继承 FD3/FD4 连接，无调试 TCP 端口、无系统 profile 扫描、无第三方运行时依赖。每个 Adapter 的原生权限和资源请求守卫保持在驱动内，模型不获得任意协议调用入口。
+
+本机浏览器一次管理一个页面，常见新窗口链接归并到当前页；复杂多标签/SSO 弹窗仍可能需要人工处理。本机下载使用独立临时目录和 GUID 文件名，传输有32MB与60秒上限。CDP 不支持暂停网络下载，因此确认模式会先落在私有临时目录，批准后才移动到 Bot 工作区并生成交付卡；拒绝/关闭会取消并清理，不能将其描述成审批前零网络传输。关闭会等待浏览器退出；清除 profile 在退出后执行，避免旧进程重新写回 Cookie。
+
+投流通过 Adapter.capture 返回实际页面 JPEG；主进程 `getBrowserFrame` 合并并发采集、约330ms缓存、1280×900缩放上限，renderer 只在可见卡片/面板且窗口文档可见时按350ms拉取。当前为低带宽图片帧投流，不宣称视频/WebRTC。`BrowserTaskCard` 与 `BrowserPreviewPanel` 显示同一任务；历史画面最多12轮内存缓存，元数据独立保存在 `browser_tasks`（chat/message 外键级联、每 Bot100条），重启将 live 标成 interrupted，旧卡显示预览失效。图片与人工输入不进入 SQLite、日志、模型或消息导出。
+
+`sendBrowserInput(botId,taskId,frameId,input)` 校验当前连接任务、human、最近12帧内且不超过5秒、导航/控制版本以及单次输入互斥；坐标使用帧对应的 CSS 视口归一化，不依赖 UI 显示大小。`presentation.ts` 只实现固定的点击、滚动、文本和按键协议。renderer 将输入排队，隐藏 textarea 接收中文 IME/粘贴，接管切换先丢弃旧帧再开放输入。交还使用 `completeBrowserHandoff` 恢复同一工具等待，返回当前快照，不重放被撤销的点击/填写。停止和关闭始终撤销等待。
+
+调研依据：[Muse 官方 Browser Broker 说明](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse)描述虚拟化 Chromium、CDP、可访问性快照和接管暂停，但未公开截图所示界面的具体投流编码；[OpenMuse App 文档](https://github.com/OpenMuseAgent/OpenMuse/blob/main/docs/app.md)明确描述动作后的浏览器卡片、实时预览与画面输入接管。[Chrome 官方调试说明](https://developer.chrome.com/blog/remote-debugging-port)要求现代 Chrome 调试使用非默认 user-data-dir，因此本轮连接专用 profile，不附着用户正在使用的日常浏览器。
+
+**后续沙箱设计（未实现）**：由独立 Browser Worker 提供会话 lease、远端 CDP/受控动作、帧或 WebRTC 通道、上传/下载中转和 close/reset；新 Adapter 将 worker 能力映射到同一接口，Broker 与 UI 不改变工具协议。worker 连接认证与会话授权不交给网页/模型；断线撤销 human 输入和待执行动作，重连须重新读取页面、不能恢复旧点击；远端上传复制工作区已校验文件，下载回传后继续由本机校验大小/路径并交付。当前不配置虚构的沙箱地址，也不把沙箱显示为可用环境。
 
 ### 8.1 文档打印（printing/）
 
@@ -309,3 +345,376 @@ PDF 渲染由 `printing/pdf.ts` 封装 [Mozilla PDF.js](https://github.com/mozil
 | 长会话上下文超限 | 生成报错 | 单聊/群聊均可显式开始新话题，以累计摘要承接并切断旧原文；UI 在 40 条消息或跨日续聊时提醒。群聊另使用当前话题总结 + 最新 5 条消息，单聊限最近 30 条，记忆限 30 条；超长时按 token 预算从 oldest 侧截断 |
 | 记忆提取误记/隐私顾虑 | 用户信任受损 | Memory 面板全量可见、可删；自动提取失败静默且不阻塞主流程；手动记忆不被自动去重误删 |
 | 单写者阻塞（大消息流式落库 + UI 读取） | UI 卡顿 | WAL 模式读写并发；落库合并小事务；渲染端 delta 渲染做 rAF 节流 |
+
+
+## 13. Goals 技术设计（G1 第一批已实现，2026-10-27）
+
+> 状态：G1 第一批已落地到 `main/goals.ts`、SQLite migration、共享类型/IPC/preload、`main/goalsTools.ts` 和四种 OpenUI 卡片；规范性接口见 [SPEC §3、§4、§5.4b](SPEC.md#54b-goals本机共享目标g1-第一批)。本节保留完整目标的设计理由。审批令牌、请求幂等、分页修订、固定位置和跨会话缓存处理仍是待实施设计，不能当作当前能力。
+
+### 13.1 现状与设计选择
+
+2026-11-01 增补：用户命名 IPC `runGoalNextStep` 进入独立 `goalExecution.ts` 后台执行；`goal_executions` 与 GoalsService 保存根/专家关系、活动和真实产物。每目标未结束的根执行唯一，但不再占用聊天锁；API 补充要求在步骤边界送达，CLI 保持本轮独立续接。详见 §13.9。长期任务依赖和跨入口自动路由仍属后续设计。
+
+文档输入由 `main/chatDocuments.ts` 管理不可变附件副本和文字索引，`main/pdfText.ts` 在一次性沙箱 Chromium 会话中解析 PDF，拒绝外网请求并复用应用分发的本地 PDF.js 资源。renderer 只通过 import/read IPC 取得元数据和纯文字；orchestrator 重建历史时按从新到旧的共享预算注入资料，再保持原有消息顺序。CLI 同样收到文本化附件，图片的视觉校验与传递路径保持原契约。具体限额和降级以 SPEC 为准。
+
+代码核对基线：
+
+| 已存在的实现 | 对 Goals 的影响 |
+| --- | --- |
+| `shared/openui.ts`、`main/generativeUi.ts`、`GenerativeMessage.tsx` | 已有白名单、流式 UI 和 Markdown 混排；Choices/Form 只回填草稿，不能把 Goals 按钮伪装成已有写入能力。 |
+| `main/db.ts`、`main/ipc.ts`、`preload/index.ts`、`shared/types.ts` | 已有 Goals migration、共享类型、命名桥接和 `goal-*` 本地事件；renderer 仍只经 preload 读写。 |
+| `main/tools/toolset.ts`、`main/goalsTools.ts` | 普通 API Agent 装配八个 Goals 工具；Agent 私聊保持没有 Goals 工具，CLI 尚无应用工具桥接。 |
+| `main/scheduledTasks.ts`、工作区产物机制 | 可引用已有任务和文档；当前没有可直接复用的 Space 实体。 |
+| `main/cli/` | 本地 CLI 有独立工具体系，尚无调用 Covan Goals 的桥接；UI 生成能力不等于应用工具调用能力。 |
+
+决策：SQLite 是唯一持久事实源，renderer 的 Zustand 只是缓存。所有 Agent、卡片动作和未来后台任务调用同一个 GoalsService。首期采用「写入返回实体 + 重新 list/get」；后续用主进程本地事件失效缓存，无需搭建 HTTP 服务或 HatchGateway。
+
+材料中的 GET/PATCH/DELETE、固定位置和 engagement 用于理解参考流程。Covan 以本地 IPC 和 Agent 工具表达同一业务，不照搬远端路径，不新增 engagement 遥测。
+
+### 13.2 模块与调用路径
+
+当前第一批模块：
+
+```text
+shared/types.ts / ipcChannels.ts        类型与通道白名单
+main/db.ts + main/goals.ts              migration、事务、权限、活动和领域命令
+main/goalsTools.ts                      八个 AgentTool 的薄适配层
+main/ipc.ts + preload/index.ts          命名 IPC 与唯一 renderer 桥接
+renderer/src/components/GoalCards.tsx   看板、创建、详情、删除确认的局部查询状态
+```
+
+现有 `toolset.ts` 负责装配，`shared/openui.ts` 注册受控组件，主/preload/renderer 同步扩展契约。Goals 模块不 import 编排器；后台执行和专家派单由独立的 goalExecution 层负责。后续可以将查询缓存从卡片局部状态提取为 store，但不得复制业务规则。
+
+```text
+AgentTool ─────────────┐
+                      ├→ GoalsService → 事务 → GoalsStore(SQLite)
+用户卡片 → 命名 IPC ──┘        │                  │
+                              └→ 真实实体/错误 ←─┘
+                                       ↓
+                              Zustand 缓存 → 对话卡片
+当前：事务提交 → 本地事件 → 已打开卡片重新 list/get
+后续：事件 → 查询失效 → 跨会话缓存协调
+```
+
+所有读写都经过服务。模型不能直接执行 SQL、选择 userId 或伪造操作者；renderer 不读取数据库，不接收 Node 或任意工具调用权限。
+
+### 13.3 完整领域目标（后续设计）
+
+> 本节描述第一批之外的目标契约；当前可调用字段、权限和限制仅以 SPEC 为准。例如，当前没有活动分页、审批令牌、目标树批量改派或 `GoalDetail` 专用类型。
+
+保留材料中的主要字段；协作、版本与追溯字段补齐如下。ID 由主进程生成，时间由主进程生成 ISO 8601 UTC；数据库内部可沿用 Unix 毫秒，在 DAO 统一转换。
+
+```ts
+type GoalStatus = 'ACTIVE' | 'PAUSED' | 'RETIRED' | 'COMPLETED'
+type GoalSource = 'user_goal' | 'assistant_tracking'
+type GoalCategory =
+  | 'HEALTH' | 'RELATIONSHIPS' | 'MONEY' | 'CAREER'
+  | 'INTERESTS' | 'PRODUCTIVITY' | 'SOMETHING_ELSE'
+type GoalArtifact =
+  | { type: 'cron'; id: string; title: string; schedule: string; status: string }
+  | { type: 'document'; id: string; title: string; path: string }
+  | { type: 'space'; id: string; title: string; slug: string }
+type GoalUpdate = {
+  id: string
+  text: string
+  createdAt: string
+  kind: 'note' | 'created' | 'renamed' | 'status_changed' | 'assignment_changed'
+    | 'artifact_attached' | 'reordered'
+  actorKind: 'user' | 'agent' | 'system'
+  authorAgentId: string | null // 用户/系统为 null；Bot 删除后靠作者快照显示
+  sessionId?: string
+}
+type Goal = {
+  id: string
+  title: string
+  summary?: string
+  description?: string
+  emoji?: string
+  imageUrl?: string             // 预留；G1 不接受任意远程图片
+  status: GoalStatus
+  source: GoalSource
+  category?: GoalCategory
+  parentGoalId: string | null
+  subGoals?: Goal[]             // get 返回一级子目标；list 默认不展开
+  sortOrder: number
+  fixedPosition?: number | null // G2
+  momentum?: number            // 0..1；省略表示未知，不等于 0
+  sessionId?: string           // 创建会话，兼容材料字段；在 Covan 对应 chatId
+  sessionIds: string[]         // 创建及后续触达会话，去重
+  isThread?: boolean          // 预留；G1 不使用 Goal 充当聊天线程
+  ownerAgentId: string | null
+  collaboratorAgentIds: string[]
+  lastTouchedByAgentId: string | null
+  artifacts?: GoalArtifact[]
+  updates?: GoalUpdate[]
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+type GoalsListResponse = { goals: Goal[]; nextCursor: string | null }
+type GoalDetail = Goal & { updatesNextCursor: string | null }
+```
+
+约束：
+
+- `userId` 属于存储与调用上下文，不从工具参数接收。Covan 当前无账号体系；G1 在 settings 生成稳定本机用户 UUID，同一 profile 的所有 Bot 共用该身份。保留按 userId 查询的边界，不宣称已经有多用户认证。
+- `ownerAgentId` 对应 `bots.id`，是责任人而非数据所有者。默认创建卡的作者为主责，可由用户改派或清空；协作者最多 20 个、去重且不含主责。Bot 必须存在并属于当前本机用户。
+- G1 最大树深为 2（根 + 一级子目标），每根最多 100 个子目标；子目标继承来源与协作范围，不允许对子目标独立改派；修改根目标的责任人/协作者时整树同步。`subGoals` 只作查询投影，不支持把任意嵌套 JSON 当 patch 覆盖整棵树。
+- 标题去首尾空白后 1–120 字符，summary ≤500、description ≤10,000、活动文本 1–2,000；emoji ≤16 字符。分类、来源、状态严格枚举，momentum 必须是有限数且在 0–1 范围。
+- 主目标与子目标状态互不自动传播；动量也不自动汇总。COMPLETED 不强制写 momentum=1，缺失动量不展示伪造数值。
+- G1 允许 ACTIVE→PAUSED/COMPLETED/RETIRED、PAUSED→ACTIVE/COMPLETED/RETIRED、COMPLETED→ACTIVE/RETIRED、RETIRED→ACTIVE；其余返回校验错误。同状态提交视为无变化，不追加重复活动。
+- source 在创建后不可改；parentGoalId 创建后不可改，G1 不做跨父移动。createdAt/id/userId/version/lastTouchedByAgentId 均不可由模型 patch。
+- G1 每个目标最多 50 个关联对象；`get_goal` 包含全部子目标、关联和最近 50 条活动，旧活动通过游标加载。`sessionIds` 不因查询增长，仅成功写入或派单触达时更新。
+
+### 13.4 存储、迁移与删除语义
+
+采用 additive migration 新增以下逻辑表；实现时将精确 DDL、索引与迁移版本写入 SPEC §3。
+
+| 表 | 关键内容与约束 |
+| --- | --- |
+| goals | `(user_id,id)` 唯一键；领域标量、parent_id、owner_agent_id、version；同用户复合父外键；parent 删除级联子目标，owner Bot 删除置空，绝不随 Bot 删除级联 Goal。 |
+| goal_collaborators | `(user_id,goal_id,agent_id)` 唯一；引用目标、Bot，删除 Bot 仅解除协作关系。 |
+| goal_sessions | `(user_id,goal_id,chat_id)` 唯一；chat 删除仅解除链接，不删除目标；创建会话失效时清空 sessionId。 |
+| goal_artifacts | 内部关联 ID、goal_id、kind、真实对象引用、展示快照；同目标同对象唯一。目标删除仅删除关联。 |
+| goal_updates | 独立 UUID、goal_id、kind、text、author_agent_id、chat_id、时间；目标删除级联活动，作者 Bot 删除后保留作者名称快照、置空引用。 |
+| goal_operations | `(user_id,request_id)` 唯一、命令与参数 hash、结果/目标引用；保证重试幂等，不写通用观测日志。 |
+| goal_order_scopes | userId + source + parentId 对应的排序修订号；创建、删除、重排和 G2 固定位置变更时递增，用于分页失效与并发校验。 |
+
+索引覆盖 `(user_id,source,parent_id,sort_order,id)`、status 筛选、owner 与协作者查询，以及活动 `(user_id,goal_id,created_at,id)`。每次读取、更新、关联和递归删除都必须带 userId 条件；角色和外键不能代替范围检查。
+
+一次变更在单事务内完成：权限/版本校验 → 写实体与关联 → 写系统活动 → 增加 version 与排序修订号（如需要）→ 记录幂等结果。创建父目标与最多 3 条初始子目标原子提交，任何一项失败整批回滚；G1 不允许部分保存后显示「全部成功」。
+
+修改子目标时同时递增父目标 version，以使详情缓存和删除确认失效。Bot 删除与批量改派同样经服务完成，继承的子目标协作信息在一个事务内更新；产生「待指派」活动，现有目标内容保留。
+
+删除根目标会删除其子目标、活动、会话链接和关联记录，但不删除聊天消息、工作区文件或实际定时任务；子目标可以单独删除。G1 是确认后的硬删除，无回收站承诺。幂等记录对已删除实体只保留必要结果和摘要，不返回旧实体令 UI 复活目标，删除事务同时清理缓存的敏感实体结果。
+
+不自动把用户资料或 fitness_profiles 的目标字段迁移成 Goal。迁移只建空表；导入属于后续显式用户操作。迁移回归使用临时库，不读取真实 userData。
+
+### 13.5 工具契约与分页
+
+材料列出的工具实际是 **八个**。G1 全部适配同一个领域服务，不能在 renderer 和 Agent 侧各实现一份业务。
+
+| 工具 | 输入要点 | 成功结果 |
+| --- | --- | --- |
+| list_goals | source?、status?（单状态或状态数组）、limit?、cursor? | GoalsListResponse；无 source 返回两个来源，省略 status 返回 ACTIVE/PAUSED，空数组非法；查询全部显式传四种状态。 |
+| get_goal | id、updatesLimit?、updatesCursor? | GoalDetail；活动默认 50，最多 100；不存在或越范围返回 NOT_FOUND。 |
+| create_goal | title、summary?、description?、category?、source?、parentGoalId?、emoji?、subGoals?、ownerAgentId?、collaboratorAgentIds? | 已提交 Goal；默认 ACTIVE / user_goal；subGoals 为最多 3 条 `{title,emoji?}` 草稿，不接受客户端指定 ID。 |
+| update_goal | id、patch | 完整当前 Goal；patch 仅允许 title/summary/description/emoji/category/status/momentum/ownerAgentId/collaboratorAgentIds，各字段单独鉴权；G1 不通过 patch 修改顺序。 |
+| delete_goal | id | `{ok:true}`；必须满足删除确认，影响目标树版本变化时重新确认。 |
+| add_goal_update | goalId、text | 真实 GoalUpdate；作者和 kind=note 由服务写入，不能冒充系统活动或另一 Agent。 |
+| attach_artifact | goalId、artifact | 最新 Goal；对象已存在且可访问才允许绑定，标题/状态等展示快照由服务解析，不信任模型提供的值。 |
+| reorder_goals | orderedIds | void；同一来源、同一父级，拒绝重复、跨用户或跨范围 ID；使用额外排序修订号保证原子重排。 |
+
+每次写操作还有内部命令元数据：`requestId`、`expectedVersion`（创建除外；重排用 expectedOrderVersion）、按需 `approvalId`。它们由受控执行器保存和传递；Agent Tool schema 可暴露版本字段供模型引用读取结果，但 actor/userId/审批权由主进程提供，不能让模型自己授予。void 写入由适配层返回最小 `{ok:true}` 工具回执，然后重新 list/get。
+
+列表规则：只返回顶层目标，子目标从详情读取；limit 默认 50、范围 1–100，下一页沿用相同筛选。默认按来源固定顺序、sortOrder 升序、id 升序，G2 再在分区内加入 fixedPosition 优先。看板必须注明仅展示当前筛选和已加载范围。
+
+游标为不透明的编码数据，包含 user scope、筛选 hash、最后排序键与对应排序修订号；主进程校验结构、范围及筛选一致性，不能把游标中的 userId 当权限来源。重排/新增/删除导致相关修订号变化时返回 CURSOR_STALE，让客户端从第一页重读；实体去重按 id。状态变更使相关筛选查询失效；分页不承诺跨写入的历史快照。
+
+`reorder_goals` 支持当前页或筛选后的子集：以服务读取的完整同级序列为基准，仅替换 orderedIds 原有槽位，其他目标相对位置不变，随后原子重编 sortOrder。客户端不能只把已加载部分当成全部列表覆盖。scope 与 expectedOrderVersion 来自列表附带的内部查询元数据，不由模型猜测。
+
+G2 固定位置通过受控 `update_goal` 扩展 `fixedPosition: number | null`：仅顶层目标、非负整数，在同用户/来源分区内唯一。固定到已占位置时事务内顺移其他固定目标，取消固定后按 sortOrder 排列；相邻固定目标的版本、排序修订号和事件一并更新。固定数量首期不另设产品上限；固定位置与普通排序是两层规则，不能把拖拽后的局部可见列表当成全量固定列表。
+
+错误为稳定业务码与可展示信息：VALIDATION、NOT_FOUND、FORBIDDEN、CONFIRMATION_REQUIRED、CONFLICT、CURSOR_STALE、UNSUPPORTED_ARTIFACT、INTERNAL。IPC 沿用现有 Error 传递方式，以受控序列化适配这些码，不把 SQLite 路径/堆栈或敏感数据抛给 renderer。
+
+### 13.6 用户授权、协作权限与后端适配
+
+统一执行上下文由主进程建立：`{userId, actorKind, actorAgentId?, chatId, messageId?, runId?, approvalId?}`。actorKind 区分 user/agent/system，不能使用模型输入决定身份；用户卡片保存保留卡片作者作为来源，但操作作者记为用户。
+
+| 操作 | 用户卡片 | Agent 自动执行 |
+| --- | --- | --- |
+| 列表/详情 | 可读 | 同用户 Bot 可读；外部文件内容仍受原工作区权限约束 |
+| 创建 | 确认创建后执行 | 只可消费本次创建卡的审批，不因「我想…」或模型输出自行落库 |
+| 追加活动、动量、状态、摘要/描述 | 明确保存/点击后执行 | 主责或协作者在当前任务范围内可执行；其他 Bot 需要用户对此具体操作授权 |
+| 改名、删除、改派、协作者变更、重排 | 明确确认；删除使用专用确认卡 | 需要与具体操作绑定的用户审批，主责身份本身不自动获得删除权 |
+| 关联任务/文档 | 显式关联后执行 | 主责/协作者可关联已授权对象；不得越过任务归属或工作区访问权限 |
+
+用户确认不是在 Prompt 中放一个 `confirmed:true`。主进程为已完成的卡片签发一次性 approvalId，绑定用户、会话、消息/卡片、操作、目标 ID、待保存字段 hash、预期版本和有效期（10 分钟）；创建绑定草稿 hash，删除同时绑定树版本。确认后编辑字段需换取新审批；审批只可由可信用户交互通道获取，工具传入任意字符串无效。
+
+权限在服务执行时重新检查。目标改派后，旧主责的在途写入在提交前失去权限；旧审批版本也失效。用户可在任意自己的会话管理目标，不以某个长期固定的「主 Bot」作为超级管理员。
+
+Agent 私聊：G1 保持现有只读边界；如要支持咨询目标内容，可在有用户咨询授权时额外装配 list/get，写工具不进入普通私聊。G2 的 worker 是显式派单模式，不能直接放开所有私聊的应用写权限。
+
+API Bot 通过 `createAgentToolset` 装配 Goals tools；本地 CLI 在没有受控应用工具桥接前不注入「可以保存目标」指令。所有后端均可生成受控卡片，用户确认由卡片命名 IPC 执行同一 GoalsService 命令；这不需要再调用 LLM，也不依赖 CLI 获得 SQLite 或网络端口权限。需要 CLI 自主执行 Goals 时另立经鉴权的窄桥接，不开放任意本机 HTTP/SQL 服务。
+
+### 13.7 生成式 UI 与 IPC 安全边界
+
+复用 OpenUI 的本地组件与流式校验机制，拟注册 `goals_board`、`goal_create_card`、`goal_detail`、`goal_confirm_delete` 四种业务组件（具体 OpenUI 注册名在实施时统一）。它们承载模型选择的展示意图，业务数据由存储读取，不能直接把模型 JSON 列表渲染成「真实目标」。
+
+- 创建卡接受白名单草稿字段，不接受伪造 Goal ID；看板接受筛选；详情/删除确认接受真实 goalId。标题、状态、活动、关联等实体字段由受控控制器读取。
+- 为卡片建立主进程保存的 message/card 绑定记录（拟 `message_goal_cards` 表），保存卡片种类、筛选或 goalId、初始草稿、已创建 goalId、提交 requestId、schemaVersion，不保存执行函数或审批密钥。绑定来自工具结果或经校验的卡片注册，声明一个 goalId 不授予写权限。
+- 未闭合围栏、生成中、失败、停止、来源 Bot 已离开群聊时，按现有规则禁用交互；用户消息和 Agent 私聊记录不启用卡片执行。未知组件/版本降级为静态提示，不尝试运行任意动作。
+- G1 新增明确命名的 list/get/create/update/delete/addUpdate/attach/reorder 桥接方法及卡片确认方法；preload 逐项映射通道。受控卡片处理器只调用这些方法，不给通用 OpenUI Renderer 传 toolProvider，也不允许模型指定 IPC 通道、函数或脚本。
+- 保持原 Choices/Form 的「填入回复」行为。Goals 是新增的业务组件例外，必须先在 SPEC §5.4a 与 §4 明确，不得通过修改通用 Form 的提交逻辑让旧界面突然开始写数据库。
+- 卡片只读数据从 goalsStore 按 id 订阅；同一目标的多张详情卡共用实体，草稿状态按 cardId 隔离。用户未保存输入不因外部刷新丢失，冲突时提示差异。
+- 保存成功先应用服务返回的实体，再 list/get 重读相关查询；筛选条件不再匹配时从该看板移除但保留成功反馈。失败保留草稿，不依赖一段模型生成的「已保存」。
+- 重载后看板/详情重新读取；已成功创建的卡片根据绑定的 goalId 转为详情，不能再次创建。恢复未提交表单只恢复草稿，审批需重新确认，绝不自动执行历史动作。
+
+### 13.8 并发、幂等与刷新
+
+所有变更使用乐观并发：`UPDATE ... WHERE user_id=? AND id=? AND version=?`；未命中时区分不存在与 CONFLICT，回读最新结果。追加活动、关联、子目标修改同样检查并递增目标 version。冲突不默默合并标题/负责人等字段；纯追加进展可保留原文让用户重试。
+
+卡片第一次提交前由主进程持久分配 requestId；连点、IPC 重试、刷新或崩溃恢复复用该 ID。Agent 工具调用用 runId/toolCallId 建立稳定映射；进程中断后的重试先查操作记录，不能把「结果未收到」当成「未写入」。同 requestId 同参数返回已有结果，同 requestId 不同参数拒绝；业务写入、approval 消费和幂等记录同事务提交。跨轮工具产生新 ID 时，仍需未消费的审批，因此不会重复创建同一确认卡。
+
+第一批已经提供 `goal-updated`、`goal-deleted` 与 `goals-reordered` 的 CovanEvent 联合成员，对应材料中的 `goal.updated` 语义。事件只在事务提交后发布，包含目标 ID/版本或受影响排序范围，且不广播活动正文；当前已挂载卡片收到后重新 get/list。
+
+G2 才处理跨会话查询缓存、乱序事件和删除墓碑：renderer 应按 version/request sequence 丢弃旧响应；事件遗漏、崩溃或重连仍靠重新 list/get 恢复，不把事件总线当作事实源。
+
+实体只接受更高 version，查询请求使用 request sequence 丢弃旧响应。删除事件建立当前缓存的墓碑并失效列表；同进程事件序号用于丢弃早于删除的在途响应，已删除 ID 不复用，旧更新事件不使其复活。监听在 mount 注册、unmount 注销；事件丢失、崩溃或重连均靠重新 list/get 恢复，不以事件总线为事实源。
+
+### 13.9 关联对象与专家派单
+
+关联对象使用真实引用，不复制业务对象：
+
+- cron：映射 `scheduled_tasks.id`，名称虽叫 cron，也可展示单次任务；schedule/status 从任务服务实时解析。读取跨 Bot 的任务可显示摘要，修改或删除仍遵守现有「只作用当前 Bot」工具规则。暂停/完成 Goal 不暂停任务，用户有需求时另行调用任务工具。
+- document：内部登记引用 `{botId, relativePath}` 并生成稳定关联 ID，返回的 path 是工作区相对路径。绑定、预览都复用 realpath 与工作区权限校验，拒绝绝对路径、路径逃逸和符号链接逃逸；可读 Goal 不代表可读其他 Bot 的文件内容。
+- space：类型预留；G1 attach 返回 UNSUPPORTED_ARTIFACT，不制造假实体、slug 或跳转入口。
+
+关联展示可保存快照用于对象失效后的说明，但打开前必须重新检查。`imageUrl` G1 不启用远程加载，不引入跟踪请求或新的图片访问协议。
+
+2026-11-01 已实现的首批后台执行使用 `main/goalExecution.ts`，以既有 `goal_executions` 的根/专家关系持久化派单，避免另建一套任务事实源。`goal_execution_inputs` 保存幂等补充要求；任务 UI 通过 typed IPC 查询和提交，事件仅触发失效重读。
+
+- `orchestrator.ts` 保留普通聊天/定时任务编排；目标执行按 executionId 注册 runtime、AbortController 和 sessionId，不占用 chatId 轮次锁。`Message.goal_execution_id` 由数据库关联恢复，renderer 保留后台流式结果但不据此锁住 Composer。普通历史重建跳过后台任务消息，worker 只接收目标快照、范围内补充和真实专家结果。
+- 每次执行使用 Bot 工作区下 `tasks/<executionId>/`，工作区工具与 Bash 以此为根；MCP 接收此 root（仍不是外部进程的 OS 沙箱），Skills 保持用户装配。CLI 任务使用独立目录和持久化续接会话，既有 bot/chat CLI 映射不被覆盖。浏览器仍使用该 Bot 的独立登录态与现有单任务资源约束。
+- worker 工具不提供全局资料修改、定时任务创建或目标写入；仅文件、Bash、网页/浏览器、已装配扩展及只读关联文件。主责额外获得 `consult_goal_expert`，专家无递归派单。用户明确关联在目标中的文档可通过受控读取工具按关联 ID 读取，不开放其他 Bot 的任意工作区。
+- `shared/goalExecution.ts` 定义统一状态与合法迁移，GoalsService 执行 SQLite 条件更新；`goalExecution.ts` 只为 running 阶段持有实际 Agent 和取消信号。队列持久化，等待、暂停、阻塞、待验收均释放名额。最多两项主责阶段、四项实际执行，满额按队列等待，每根最多三项专家派单。
+- `consult_goal_expert` 事务后立即返回派单 ID。主责可继续独立工作，`wait_goal_experts` 或带未完成专家的阶段结束会进入 waiting_experts；子执行完成／失败／停止时写入幂等报告收件箱，专家全部结算后自动排队唤醒主责汇总。报告携带真实作者、状态与文件引用，不把资料视为新授权；waiting_input、paused、blocked、stopped 不被专家回报自行唤醒。
+- API 在完整消息结束时将原生 transcript 与已入历史的用户输入／报告送达标记一起提交，未入历史的补充保留在收件箱。恢复保留成功工具结果，缺失的工具结果补为“结果未知，先核对”；`goalHistory.ts` 保证调用／结果的协议配对，不执行工具重放。CLI 的会话 ID 与配置指纹单独持久化，阶段成功后确认输入，多项补充合并到下一次原生续接。
+- `request_goal_input`／`block_goal_task` 保存具体原因并让出计算；主责成功进入 review，用户验收才 done，不改变 Goal 状态。暂停保留执行 ID、目录和上下文；主责暂停／停止传播到专家，继续主责只恢复跟随它暂停的专家。用户单独暂停的专家保持暂停。
+- 每项执行累计活跃预算十分钟，等待时间不计；活跃时长每秒落库、阶段结束补齐，崩溃至多丢失一个采样周期，不把应用离线时间误算为活跃执行。普通 stopChat 只停止前台；清空／删除聊天、删除 Bot、完成／改派／删除目标显式取消相关执行，暂停 Goal 则暂停任务。退出先取消实际执行与 CLI 进程组并最多等待五秒；崩溃恢复将已开始的计算置 paused，用户可检查成果后继续，不自动重放；未开始的队列首次执行仍遵循原授权。原始说明、transcript 与工具正文不写入观测日志。
+
+2026-11-02 状态机简图（错误重试须用户显式触发；done／stopped 不复活）：
+
+```mermaid
+stateDiagram-v2
+  [*] --> queued: 用户启动
+  queued --> running: 有可用名额
+  running --> waiting_experts: 派单后等待
+  waiting_experts --> queued: 专家结算／自动投递报告
+  running --> waiting_input: 需要补充
+  running --> blocked: 无法继续
+  waiting_input --> queued: 用户补充
+  blocked --> queued: 用户处理并继续
+  running --> paused: 用户暂停／应用中断
+  queued --> paused: 用户暂停
+  paused --> queued: 用户继续／沿用检查点
+  running --> review: 主责交付
+  review --> queued: 用户修改意见
+  review --> done: 用户验收
+  running --> error: 失败或预算耗尽
+  error --> queued: 用户重试且预算可用
+  running --> stopped: 用户停止
+  running --> done: 专家交付
+```
+
+回归：`npm run test:goal-tasks` 使用临时 profile、loopback 模型服务和可控执行门，覆盖双任务/普通输入、补充投递、独立取消、专家权限/幂等/失败与重启；`test:productivity` 保持目标与文档附件回归。
+
+### 13.10 实施顺序与验证矩阵
+
+| 步骤 | 改动与退出条件 |
+| --- | --- |
+| 1. 收敛契约 | 将本提案中将要交付的 G1 规则迁入 SPEC；明确 TS/schema/通道、错误码与卡片绑定。先保证主/preload/renderer 设计同步。 |
+| 2. 存储与服务 | additive migration、DAO、八个命令、活动、权限、版本、审批与幂等；临时 SQLite 测试通过，旧数据不改写。 |
+| 3. 工具与卡片 | API 工具装配、CLI 能力提示、白名单业务组件、命名 IPC 和缓存；Mock Provider 下创建到重启完整闭环通过。 |
+| 4. G1 发布 | 完成以下回归，更新 SPEC/CHANGELOG；只从 ROADMAP 移除已完成内容，不宣称 G2 已实现。 |
+| 5. G2 协作增强 | 单独完善派单、事件协议、固定位置与拖拽的 SPEC/测试，继续沿用同一事实源。 |
+
+| 验证层 | 最小必要场景 / 对应需求 |
+| --- | --- |
+| 存储和 migration | 新库、旧库升级、两次启动无重复迁移；父子创建失败回滚、删除范围、Bot 删除不丢目标；FR-GOAL-03/05/06/09。 |
+| 权限与契约 | 两个合成 userId 不能越界；未参与 Bot 禁写；模型伪造确认/操作者无效；过期审批、字段篡改、改派后旧写入拒绝；FR-GOAL-10。 |
+| 幂等与并发 | 连点、相同请求重试、提交后未收到响应、不同参数复用 ID、两 Agent 同版本更新、子目标变更使父确认失效；FR-GOAL-12。 |
+| 查询与关联 | 50 条分页、多来源/状态筛选、重复标题消歧、排序后游标失效、局部排序保留其他项；文件越界、任务失效、Space 拒绝；FR-GOAL-01/02/08/11。 |
+| Agent Mock | 工具真实 create/update/list、缺少结果不得声称保存、普通私聊无写工具、CLI 无桥接不伪装、无需模型即可提交卡片；FR-GOAL-03/09/10。 |
+| Electron UI | 单聊/群聊、多卡同实体、四状态、取消删除、失败保留草稿、流式/停止禁用、深浅主题与键盘、重启不重放、通用 Form 仍填草稿；FR-GOAL-01 至 12。 |
+| G2 专项 | 两 Bot 派单成功/失败/取消/中断、幂等回写；重复/乱序/遗漏事件与删除后旧响应；拖拽/键盘固定位置；FR-GOAL-11/13/14。 |
+
+实现验证最低执行 `npm run typecheck`、`npm run smoke`、`npm run test:openui` 与新增 Goals Electron 回归，按影响补充 `test:context`。新增脚本和测试名称在实现时落地，不把计划中的命令写成已经可执行。所有测试使用临时 profile 和 Mock/loopback，不读取真实私聊、用户数据库或付费 Provider。
+
+### 13.11 Super-agent 文章借鉴范围与示意
+
+> 核对日期：2026-11-02。参考 [《Super-agent 设计探索：迈向更自主的 Agent 系统》](https://mp.weixin.qq.com/s/zoS7GlReWPhfCjENGxXCdg)及团队公开原型的[领域模型](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/001-domain.md)、[执行与恢复](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md)。文章讨论完整架构方向，公开原型也明确不是全部设计的实现。下表只描述 Covan 当前代码；行为契约以 [SPEC §5.4b](SPEC.md#54b-goals本机共享目标g1-第一批) 为准。
+
+本次落地的是**本地 Goals 后台任务的执行基础**：用户在同一聊天里继续交流，两项目标分别执行，主责可请已配置的专家协作，真实成果回写目标。Bot 继续承载角色与模型，Goal 承载目标，每次 Execution 承载独立的一轮工作。这里没有新增一个常驻、理解所有会话的全局 Router。
+
+| 文章思路 | 当前达到的程度 | Covan 的具体做法与边界 |
+| --- | --- | --- |
+| §2 双层架构、隔离并发 | 部分落地 | 聊天与后台执行分离；每次执行独立 session、取消信号和目录，支持主责/专家关系。派发和权限由程序控制；主责仍亲自执行工作，专家派单立即返回，等待时释放名额，尚无只负责路由的全局模型会话。 |
+| §3.1–3.2 事件过滤、订阅直通 | 定向输入已落地，通用事件路由未实现 | 任务卡携带 executionId；引用后台回复／补充时主进程按真实消息关系路由，输入带来源回执并按请求 ID 去重。未关联引用的普通聊天继续普通回复；没有新增 GitHub/邮件事件源、Thread 订阅、任务归属语义判断或 Router 批处理。已有群聊 Jev/LLM 发言判断不等于该事件路由系统。 |
+| §3.3 Inline & Spill、链式召回 | 使用了小范围按需读取 | 主责只接收目标快照、近期进展和关联引用；专家只收到派单内容。`read_goal_artifact` 按真实关联 ID 读取目标文档，报告有长度限制；尚无跨事件、会话、任务的通用引用图与多跳召回。 |
+| §3.4 提前行动、投机执行 | 未实现 | 后台目标仍由用户点击启动，专家受用户配置的协作范围约束；没有依据环境消息自动推测并提前开工。 |
+| §4 异步交互、减少打扰 | 目标层面已落地 | 后台工作不占用普通聊天锁；API 在模型步骤边界接收补充，CLI 在当前调用结束后处理。任务卡展示进度，专家完成不另发系统通知；专家派单立即返回，真实报告通过收件箱唤醒等待中的主责，普通聊天与所有工具尚未统一改为异步 start/stop 协议，也未接入多信道输出。 |
+| §5 计算、状态、环境分离 | 本地状态与执行生命周期已分离 | SQLite 保存状态机、执行关系、输入／报告收件箱、API 检查点和 CLI 续接，文件留在本机任务目录；重载可查，重启将中断任务暂停，用户可沿检查点继续。尚无云端 Agent Loop、远程执行 daemon、跨设备或离线持续运行。 |
+| §6 外部 Watchdog、自愈 | 仅有基础保护 | 已有并发上限、十分钟超时、独立取消、退出清理和启动恢复；没有独立 Watchdog Agent，也不会自动判断任务偏航、无效循环或修复后重试。 |
+
+下面以两个目标、其中一个咨询专家为例。图中执行框各有独立上下文与目录；数据库中的关联关系不意味着共享全部聊天或记忆。
+
+```mermaid
+flowchart TB
+  U[用户] --> C[普通聊天：继续交流]
+  U --> T[任务卡：启动、补充、暂停／继续、验收]
+  T -->|指定目标／执行 ID| A[目标 A：主责执行]
+  T -->|指定目标／执行 ID| B[目标 B：主责执行]
+  A -->|异步派单，立即返回 ID| Q[持久队列／有空位领取]
+  Q --> E[已配置的专家：独立子执行]
+  E -->|真实报告／文件| I[(持久收件箱)]
+  I -->|报告到齐，自动唤醒汇总| A
+  A --> D[(SQLite：状态、检查点、输入、进展与文件引用)]
+  B --> D
+  E --> D
+  D -.->|事件提示后重新查询| T
+```
+
+实现集中在以下几处：
+
+- [goalExecution.ts](../main/goalExecution.ts)：启动独立任务、限制全局两项根目标/四项执行（含专家）、持久排队、异步专家派单、等待／唤醒、验收、预算和取消传播；[goals.ts](../main/goals.ts) 与 [db.ts](../main/db.ts) 保存执行和输入，防止重复提交产生重复工作。
+- [agentRuntime.ts](../main/agentRuntime.ts)：按 executionId 注册 runtime/session，在模型步骤边界送入补充；[cli/index.ts](../main/cli/index.ts) 为任务保留独立续接会话，避免覆盖普通聊天的 CLI 映射。工作区与 Bash 使用 `tasks/<executionId>/`，MCP 接收对应 root；MCP root 仍不是操作系统沙箱，浏览器也仍受同 Bot 的既有单任务资源限制。
+- [GoalExecutionTray.tsx](../renderer/src/components/GoalExecutionTray.tsx) 与 [messagesStore.ts](../renderer/src/stores/messagesStore.ts)：任务卡明确指定补充和停止对象，后台消息不锁 Composer。[GoalCards.tsx](../renderer/src/components/GoalCards.tsx) 选择协作 Bot；系统依据真实执行记录回写报告作者和真实文件，不靠模型文本宣告完成。
+
+验证证据见 [goal-tasks-ui.mjs](../scripts/goal-tasks-ui.mjs)：临时 profile、loopback 模型与假 CLI 覆盖双目标并发、继续聊天、定向补充与去重、独立停止、专家权限/报告/文件/失败、删除执行对象、CLI 隔离、状态机、成功工具检查点恢复、重启后的 CLI 续接及崩溃后不重放。[productivity-ui.mjs](../scripts/productivity-ui.mjs) 继续覆盖原有目标与附件功能。这些测试验证上述本地闭环，不代表文章中的完整 Super-agent 架构已经完成；后续候选见 [Roadmap](ROADMAP.md#goals第二批共享协作与交互完善)。
+
+### 13.12 本地 Super-agent 原型代码借鉴与任务续接（2026-11-02）
+
+本轮实际阅读本地 `dsh-superagent-prototype` 工作树（HEAD `6337fc8`）的领域、授权、执行、架构文档，及 `core/intake.ts`、`core/tickets.ts`、`core/ports.ts`、`app/effects.ts`、`app/outbox.ts`、`app/runtime.ts` 和对应 followups/effects 回归。重点是输入归属、先存后执行、原请求去重与存储所有权。原仓库作为只读参考，不安装其部署配置，不接入其外部账号。
+
+| 原型中的机制 | Covan 本次迁入方式 | 当前边界 |
+| --- | --- | --- |
+| Intake 的 Trigger 去重、Tickets 的显式 attach／follow-up ownership | `sendGoalFollowUp` 按真实消息的后台执行／任务补充关系解析目标；同会话校验，引用链继续原执行；不再触发普通聊天轮次 | 仅处理用户明确引用；尚无整个聊天的订阅扇出、自动语义路由或手回 Eval |
+| Effects／Outbox 的事务落库后交付、持久回执 | 聊天消息、输入来源／引用 ID 和唤醒状态同事务提交，之后才发事件与调度；原请求重试返回原消息，运行后通过原生检查点确认送达 | 本地 SQLite 收件箱；未引入远端通道的重试队列、跨进程投递或网络送达保证 |
+| Executor 对用户续接的调度优先级 | 未送达的用户补充优先于其他专家／新目标，队列位置同序；等待专家的主责先处理新要求 | 保留两项主责／四项执行上限，不增加额外名额 |
+| Runtime 打开 Store 前独占状态目录 | Electron 在 userData 确定后、数据库打开前获取单实例锁；重复启动只唤起原窗口；重启脚本有界等待旧进程退出 | 同机同 profile 保护，不代表多设备协调或外部进程沙箱 |
+
+```mermaid
+flowchart LR
+  Q[引用任务回复或补充] --> C[普通输入框：继续此任务]
+  C --> V[核验真实引用、同会话与任务范围]
+  V --> T[(事务：用户消息、输入、唤醒状态)]
+  T --> W[暂停时保存等待]
+  T --> S[用户补充优先调度]
+  S --> E[原执行、原上下文]
+  E --> A[检查点确认已送达]
+  A --> C
+```
+
+消息的 `goal_input_execution_id` 独立落库，不随目标删除丢失；输入记录不存在时回执显示关联失效，不把旧补充重新当成普通聊天。普通聊天历史与新话题摘要跳过后台结果和这些补充；定向补充不进入普通聊天自动记忆或触发其摘要，避免跨回普通会话及事务回滚前泄漏事件。客户端持久保存尚未确认的请求 ID，失败保留草稿；既有原生检查点仍是输入真正送达的依据。引用定位不扩大工具权限，终态不复活，暂停不被输入／报告自行解除。
+
+验收见 `scripts/goal-tasks-ui.mjs`：真实 UI 引用／取消、附件拒绝保留、前台生成期间补充、目标之间隔离、引用链／重复请求／跨会话／终态拒绝、等待专家时先响应用户、重启保留回执、已有任务补充优先与重复进程不恢复原任务。`scripts/smoke.mjs` 另用 SQLite 故障注入验证事务回滚，以及来源在删除后保留、输入确认和队列位置。外部 Source、Policy／Mandate、语义 Eval、整个 Thread 的订阅、远端 Outbox 与独立 Watchdog 仍属后续能力。
+
+## 14. Agent 主页技术设计（已实现，2026-10-27）
+
+`main/agentHome.ts` 将主页视为 Bot 级的“已校验展示配置”，而不是新的 Agent 状态或目标副本。表 `agent_homes(bot_id, content, generated_at, updated_at)` 是唯一持久化；`shared/types.ts` 的 `AgentHome`、`shared/ipcChannels.ts` 的 `agentHome:get/regenerate`、preload 映射和 `main/ipc.ts` 同步组成契约。
+
+```text
+Bot 人设 + 固定主页指令
+            │  completeOnce（无工具、无聊天记录/记忆）
+            ▼
+     OpenUI 字符串 ──→ split + validateUiSource ──→ agent_homes(SQLite)
+            │                                               │
+            └──────────────拒绝/保留旧页                    └→ agent-home-updated
+                                                            ▼
+AgentHomeView → GenerativeMessage → 固定 GoalsBoard → Goals IPC → GoalsService
+```
+
+主页生成复用现有 OpenUI 白名单与 renderer，不新增第二套 DSL 或 renderer。主进程只接受单块闭合 `openui-lang`，再额外拒绝 `Choices`、`Form` 与会携带单目标写入流程的 Goal 卡；这使模型只有布局表达权。`GoalsBoard` 是 React 端注册的固定组件，模型只可声明它，不能传入目标 JSON、ID、IPC 名称或 SQL。完成、暂停、删除等动作由组件经已有命名桥接执行，主页本身没有通用 tool provider。
+
+首次读取返回不写库的确定性模板，保证没有模型也有可用主页。刷新生成失败或校验失败不覆盖上一份有效源码；成功后才以一次 SQLite upsert 保存，并发出事件让其他 renderer 失效重读。UI 状态仅记录当前打开的 botId；选择另一会话即退出主页，聊天、草稿和消息存储均不被主页生成修改。

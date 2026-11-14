@@ -14,7 +14,8 @@ import type {
   ScheduledTask,
   StartChatTopicResult,
 } from '../shared/types'
-import { imageContent, validateChatImages } from './chatImages'
+import { attachmentContent, validateChatAttachments } from './chatDocuments'
+export { runGoalNextStep, stopGoalExecution, sendGoalExecutionInput } from './goalExecution'
 import * as db from './db'
 import {
   abortChat,
@@ -56,13 +57,16 @@ const ZERO_USAGE: Usage = {
  */
 function toPiHistory(messages: Message[], self: Bot): PiMessage[] {
   const out: PiMessage[] = []
+  const budget = { remaining: 120_000 }
+  const contents = new Map(messages.slice().reverse().map((message) => [message.id, attachmentContent(message.attachments, budget)]))
   for (const m of messages) {
+    if (m.status === 'streaming' || m.goal_execution_id || m.goal_input_execution_id) continue
     if (m.sender_type === 'user') {
       out.push({
         role: 'user',
         content: [
-          { type: 'text', text: m.content || '请查看这些图片。' },
-          ...m.attachments.map(imageContent),
+          { type: 'text', text: m.content || '请阅读这些附件，并引用文件名与页码或行号。' },
+          ...(contents.get(m.id) ?? []),
         ],
         timestamp: m.created_at,
       })
@@ -91,7 +95,7 @@ function toPiHistory(messages: Message[], self: Bot): PiMessage[] {
               type: 'text',
               text: '[历史图片：这是你此前回复中生成的图片，不是新的用户请求]',
             },
-            ...m.attachments.map(imageContent),
+            ...(contents.get(m.id) ?? []),
           ],
           timestamp: m.created_at,
         })
@@ -102,7 +106,7 @@ function toPiHistory(messages: Message[], self: Bot): PiMessage[] {
         role: 'user',
         content: [
           { type: 'text', text: `[${name}]: ${m.content}` },
-          ...m.attachments.map(imageContent),
+          ...(contents.get(m.id) ?? []),
         ],
         timestamp: m.created_at,
       })
@@ -148,7 +152,7 @@ function formatTopicSummaryInput(messages: Message[]): {
   let chars = 0
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]
-    if (message.sender_type === 'system' || message.status === 'streaming')
+    if (message.sender_type === 'system' || message.status === 'streaming' || message.goal_execution_id || message.goal_input_execution_id)
       continue
     const who =
       message.sender_type === 'user'
@@ -298,7 +302,7 @@ export async function sendUserMessage(
       chatId,
       content,
       mentions,
-      validateChatImages(attachments),
+      validateChatAttachments(attachments),
     )
     session.revision += 1
     for (const botId of mentions) session.forcedMentions.add(botId)
@@ -320,7 +324,7 @@ export async function sendUserMessage(
       content,
       mentions,
       controller.signal,
-      validateChatImages(attachments),
+      validateChatAttachments(attachments),
     )
   } catch (e) {
     if (!controller.signal.aborted && db.getChat(chatId)) {
@@ -356,6 +360,10 @@ export function isTurnRunning(chatId: string): boolean {
   return turns.has(chatId)
 }
 
+export function isGroupDiscussionRunning(chatId: string): boolean {
+  return groupSessions.has(chatId)
+}
+
 export function stopTurn(chatId: string): void {
   turns.get(chatId)?.abort()
   for (const controller of groupSessions.get(chatId)?.decisions ?? [])
@@ -363,10 +371,15 @@ export function stopTurn(chatId: string): void {
   abortChat(chatId)
 }
 
-/** 执行单个定时任务：不落伪造的用户消息，只把 Bot 的真实结果投递到任务所属会话。 */
-export async function runScheduledTask(task: ScheduledTask, traceId: string): Promise<{
+/** 定时任务只投递真实 Bot 结果；Goals 使用独立的 goalExecution 路径。 */
+export async function runScheduledTask(task: ScheduledTask, traceId: string) {
+  return runBackgroundTask(task, traceId)
+}
+
+async function runBackgroundTask(task: Pick<ScheduledTask, 'id' | 'bot_id' | 'chat_id' | 'title' | 'prompt' | 'model'>, traceId: string): Promise<{
   status: 'done' | 'error' | 'stopped'
   error?: string
+  messageId?: string
 }> {
   emit({
     type: 'scheduled-task-state',
@@ -480,7 +493,7 @@ export async function runScheduledTask(task: ScheduledTask, traceId: string): Pr
     emit({ type: 'message-done', chatId: chat.id, message })
     emit({ type: 'chat-updated', chatId: chat.id })
     if (status === 'done') noteNewMessages(chat.id, [bot.id], 1)
-    return { status, error: error || undefined }
+    return { status, error: error || undefined, messageId: placeholder.id }
   } finally {
     emit({
       type: 'scheduled-task-state',
@@ -490,6 +503,7 @@ export async function runScheduledTask(task: ScheduledTask, traceId: string): Pr
     })
   }
 }
+
 
 function appendUserMessage(
   chatId: string,

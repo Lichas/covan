@@ -1,6 +1,6 @@
 // components/BotSettingsPanel.tsx — 右栏：Bot 资料 / 记忆 / 工作区
 import { useEffect, useRef, useState, type RefObject } from 'react'
-import { Images, SlidersHorizontal, HeartPulse, Brain, FolderOpen, Clock3, Puzzle, type LucideIcon } from 'lucide-react'
+import { Images, SlidersHorizontal, HeartPulse, Brain, FolderOpen, Clock3, Puzzle, House, Globe, type LucideIcon } from 'lucide-react'
 import { DEFAULT_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS, MIN_OUTPUT_TOKENS } from '@shared/tokenLimits'
 import type {
   Bot,
@@ -25,6 +25,7 @@ import { ExtensionsPanel } from './ExtensionsPanel'
 import { HealthPanel } from './HealthPanel'
 import { CliAccessSegmented, isCliBackend } from './LocalCliFields'
 import { ModelPicker, describeBotModel } from './ModelPicker'
+import { BrowserBackendSelector } from './BrowserPreview'
 import { api } from '../lib/api'
 import { Toggle, inputCls } from './controls'
 import { ChevronRightIcon, CloseIcon, PencilIcon } from './icons'
@@ -1013,6 +1014,22 @@ export function BotSettingsPanel({
         <div className="mt-1 w-full truncate px-1 text-center text-[11.5px] text-stone-400">
           {bot.description || '暂无描述'}
         </div>
+        <button
+          type="button"
+          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-stone-700 transition hover:bg-stone-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-400 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-200 dark:hover:bg-stone-700"
+          onClick={() => {
+            const ui = useUiStore.getState()
+            ui.setRightPanelOpen(false)
+            ui.setAgentHomeBotId(bot.id)
+          }}
+        >
+          <House size={14} strokeWidth={1.8} aria-hidden="true" />
+          打开主页
+        </button>
+        <button type="button" className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-2.5 py-1.5 text-[11px] dark:border-stone-700" onClick={() => void api.openBrowser(bot.id).catch((reason) => setError(reason instanceof Error ? reason.message : '浏览器无法打开'))}>
+          <Globe size={14} aria-hidden="true" />打开浏览器
+        </button>
+        <BrowserBackendSelector key={bot.id} botId={bot.id} />
       </div>
 
       {error && (

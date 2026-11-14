@@ -8,6 +8,11 @@ import type {
   BotCreateInput,
   FitnessLogInput,
   FitnessProfileInput,
+  GoalArtifactInput,
+  GoalCreateInput,
+  GoalListOptions,
+  GoalPatch,
+  GoalSource,
   JevConfigInput,
   MemoryKind,
   ProviderInput,
@@ -15,10 +20,9 @@ import type {
 } from '../shared/types'
 import {
   MAX_IMAGE_BYTES,
-  chatImagePath,
   storeChatImage,
-  validateChatImages,
 } from './chatImages'
+import { chatAttachmentPath, isDocument, readChatDocument, storeChatAttachment, validateChatAttachments } from './chatDocuments'
 import { randomUUID } from 'node:crypto'
 import { CH } from '../shared/ipcChannels'
 import { isGroupBackground } from '../shared/groupBackgrounds'
@@ -28,10 +32,14 @@ import { applyWindowTransparency } from './windowShell'
 import {
   getChatTopicState,
   isTurnRunning,
+  isGroupDiscussionRunning,
   sendUserMessage,
   startChatTopic,
   stopTurn,
+  runGoalNextStep,
+  stopGoalExecution,
 } from './orchestrator'
+import { controlGoalExecution, pauseGoalExecutions, sendGoalExecutionInput, sendGoalFollowUp, stopChatGoalExecutions, stopBotGoalExecutions } from './goalExecution'
 import { refreshMemorySummaries } from './memory'
 import { registerContextIpc } from './contextIpc'
 import {
@@ -57,6 +65,9 @@ import { registerCliIpc } from './cli/ipc'
 import { getJevConfig, saveJevConfig, testJev } from './decisionStrategy'
 import { printWorkspaceFile, pickAndPrintDocument } from './printing'
 import { ensureWelcome, regenerateWelcome } from './welcome'
+import * as goals from './goals'
+import * as agentHome from './agentHome'
+import * as browserController from './browser/controller'
 
 // ---------- 参数校验 ----------
 
@@ -97,6 +108,20 @@ function handle<TArgs extends unknown[], TRet>(
 // ---------- 注册 ----------
 
 export function registerIpc(): void {
+  handle(CH.openBrowser, (botId: string) => browserController.openBrowser(botId))
+  handle(CH.setBrowserBackend, (botId: string, backend: import('../shared/types').BrowserBackend) => browserController.setBrowserBackend(botId, backend))
+  handle(CH.getBrowserFrame, (botId: string, taskId: string) => browserController.getBrowserFrame(botId, taskId))
+  handle(CH.sendBrowserInput, (botId: string, taskId: string, frameId: string, input: import('../shared/types').BrowserInput) => browserController.sendBrowserInput(botId, taskId, frameId, input))
+  handle(CH.takeOverBrowser, (botId: string) => browserController.takeOverBrowser(botId))
+  handle(CH.showBrowserNative, (botId: string) => browserController.showBrowserNative(botId))
+  handle(CH.getBrowserState, (botId: string) => browserController.getBrowserState(botId))
+  handle(CH.navigateBrowser, (botId: string, url: string) => browserController.navigateBrowser(botId, url))
+  handle(CH.setBrowserControl, (botId: string, mode: 'human' | 'agent') => browserController.setBrowserControl(botId, mode))
+  handle(CH.setBrowserPolicy, (botId: string, policy: 'auto' | 'confirm') => browserController.setBrowserPolicy(botId, policy))
+  handle(CH.completeBrowserHandoff, (botId: string, id: string, completed: boolean) => browserController.completeBrowserHandoff(botId, id, completed))
+  handle(CH.respondBrowserApproval, (botId: string, approvalId: string, approved: boolean) => browserController.respondBrowserApproval(botId, approvalId, approved))
+  handle(CH.closeBrowser, (botId: string) => browserController.closeBrowser(botId))
+  handle(CH.resetBrowserSession, (botId: string) => browserController.resetBrowserSession(botId))
   registerExtensionIpc()
   registerCliIpc()
   handle(CH.importChatImage, (name: string, bytes: Uint8Array) => {
@@ -104,6 +129,16 @@ export function registerIpc(): void {
     if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_IMAGE_BYTES)
       throw new Error('每张图片最多 16MB')
     return storeChatImage(Buffer.from(bytes), name)
+  })
+  handle(CH.importChatAttachment, async (name: string, bytes: Uint8Array) => {
+    assertStr(name, 'name')
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_IMAGE_BYTES)
+      throw new Error('每个附件最多 16MB')
+    return storeChatAttachment(Buffer.from(bytes), name)
+  })
+  handle(CH.readChatDocument, (relative: string) => {
+    assertStr(relative, 'path')
+    return readChatDocument(relative)
   })
   registerContextIpc()
   handle(CH.listUserPresetAvatars, () => listUserPresetAvatars())
@@ -201,6 +236,92 @@ export function registerIpc(): void {
       throw new Error('参数 days 必须是数字')
     return db.getFitnessSummary(botId, days ?? 30)
   })
+  handle(CH.getAgentHome, (botId: string) => {
+    assertStr(botId, 'botId')
+    return agentHome.getAgentHome(botId)
+  })
+  handle(CH.regenerateAgentHome, async (botId: string) => {
+    assertStr(botId, 'botId')
+    return agentHome.regenerateAgentHome(botId)
+  })
+  // Goals are a local, user-confirmed capability. Renderer calls run as the
+  // user; Agents use the same service through main/goalsTools.ts.
+  handle(CH.listGoals, (options?: GoalListOptions) => goals.listGoals(options ?? {}))
+  handle(CH.getGoal, (id: string) => {
+    assertStr(id, 'id')
+    return goals.getGoal(id)
+  })
+  handle(CH.runGoalNextStep, (id: string, expectedVersion?: number) => {
+    assertStr(id, 'id')
+    if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 1)) throw new Error('目标版本无效')
+    return runGoalNextStep(id, expectedVersion)
+  })
+  handle(CH.listGoalExecutions, (chatId: string) => {
+    assertStr(chatId, 'chatId')
+    return goals.listGoalExecutions(chatId)
+  })
+  handle(CH.sendGoalFollowUp, (chatId: string, replyToMessageId: string, text: string, requestId: string) => {
+    assertStr(chatId, 'chatId'); assertStr(replyToMessageId, 'replyToMessageId')
+    return sendGoalFollowUp(chatId, replyToMessageId, text, requestId)
+  })
+  handle(CH.sendGoalExecutionInput, (executionId: string, text: string, requestId: string) => {
+    assertStr(executionId, 'executionId')
+    return sendGoalExecutionInput(executionId, text, requestId)
+  })
+  handle(CH.controlGoalExecution, (id: string, action: Parameters<typeof controlGoalExecution>[1]) => {
+    assertStr(id, 'executionId')
+    return controlGoalExecution(id, action)
+  })
+  handle(CH.stopGoalExecution, (id: string) => {
+    goals.getGoal(id)
+    stopGoalExecution(id)
+  })
+  handle(CH.createGoal, (input: GoalCreateInput) =>
+    goals.createGoal(input, { kind: 'user', chatId: input?.sessionId }),
+  )
+  handle(CH.updateGoal, (id: string, patch: GoalPatch, expectedVersion?: number) => {
+    assertStr(id, 'id')
+    if (!patch || typeof patch !== 'object') throw new Error('目标修改内容无效')
+    if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 1))
+      throw new Error('目标版本无效')
+    const goal = goals.updateGoal(id, patch, { kind: 'user' }, expectedVersion)
+    if ((patch.status && patch.status !== 'ACTIVE') || patch.ownerAgentId !== undefined || patch.collaboratorAgentIds !== undefined) {
+      const apply = patch.status === 'PAUSED' && patch.ownerAgentId === undefined && patch.collaboratorAgentIds === undefined ? pauseGoalExecutions : stopGoalExecution
+      apply(id)
+      if (patch.status && patch.status !== 'ACTIVE')
+        for (const child of goal.subGoals ?? []) apply(child.id)
+    }
+    return goal
+  })
+  handle(CH.deleteGoal, (id: string, expectedVersion?: number) => {
+    assertStr(id, 'id')
+    if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 1))
+      throw new Error('目标版本无效')
+    const children = goals.getGoal(id).subGoals ?? []
+    goals.deleteGoal(id, { kind: 'user' }, expectedVersion)
+    stopGoalExecution(id)
+    for (const child of children) stopGoalExecution(child.id)
+  })
+  handle(CH.addGoalUpdate, (id: string, value: string, expectedVersion?: number) => {
+    assertStr(id, 'id')
+    assertStr(value, '进展')
+    if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 1))
+      throw new Error('目标版本无效')
+    return goals.addGoalUpdate(id, value, { kind: 'user' }, expectedVersion)
+  })
+  handle(CH.attachGoalArtifact, (id: string, artifact: GoalArtifactInput, expectedVersion?: number) => {
+    assertStr(id, 'id')
+    if (!artifact || typeof artifact !== 'object') throw new Error('关联内容无效')
+    if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 1))
+      throw new Error('目标版本无效')
+    return goals.attachGoalArtifact(id, artifact, { kind: 'user' }, expectedVersion)
+  })
+  handle(CH.reorderGoals, (orderedIds: string[], source: GoalSource, parentGoalId?: string | null) => {
+    assertStrArray(orderedIds, 'orderedIds')
+    assertStr(source, 'source')
+    if (parentGoalId !== undefined && parentGoalId !== null) assertStr(parentGoalId, 'parentGoalId')
+    goals.reorderGoals(orderedIds, source, parentGoalId ?? null, { kind: 'user' })
+  })
   // providers
   handle(CH.listProviders, () => db.listProviders())
   handle(CH.saveProvider, (p: ProviderInput) => {
@@ -251,9 +372,12 @@ export function registerIpc(): void {
       ? refreshAutomaticAvatar(bot)
       : bot
   })
-  handle(CH.deleteBot, (id: string) => {
+  handle(CH.deleteBot, async (id: string) => {
     assertStr(id, 'id')
+    stopBotGoalExecutions(id)
+    if (db.getBot(id)) await browserController.resetBrowserSession(id)
     db.deleteBot(id)
+    db.getDb().prepare('DELETE FROM browser_activity WHERE bot_id=?').run(id)
   })
   handle(CH.pickAvatar, async (botId: string) => {
     assertStr(botId, 'botId')
@@ -361,16 +485,19 @@ export function registerIpc(): void {
   handle(CH.hideChat, (chatId: string) => {
     assertStr(chatId, 'chatId')
     stopTurn(chatId)
+    stopChatGoalExecutions(chatId)
     db.hideChat(chatId)
   })
   handle(CH.clearChatMessages, (chatId: string) => {
     assertStr(chatId, 'chatId')
     stopTurn(chatId)
+    stopChatGoalExecutions(chatId)
     db.clearChatMessages(chatId)
   })
   handle(CH.deleteChat, (id: string) => {
     assertStr(id, 'id')
     stopTurn(id)
+    stopChatGoalExecutions(id)
     db.deleteChat(id)
   })
   handle(CH.markRead, (chatId: string) => {
@@ -410,15 +537,15 @@ export function registerIpc(): void {
             const images = m.attachments
               .map((image) => {
                 try {
-                  const source = chatImagePath(image.path)
+                  const source = chatAttachmentPath(image)
                   fs.mkdirSync(assetDir, { recursive: true })
                   fs.copyFileSync(
                     source,
                     path.join(assetDir, path.basename(source)),
                   )
-                  return `![${image.name.replace(/[\[\]\\\r\n]/g, '')}](${assetName}/${path.basename(source)})`
+                  return `${isDocument(image) ? '' : '!'}[${image.name.replace(/[\[\]\\\r\n]/g, '')}](${assetName}/${path.basename(source)})`
                 } catch {
-                  return '> 图片文件不可用'
+                  return '> 附件文件不可用'
                 }
               })
               .join('\n\n')
@@ -459,11 +586,11 @@ export function registerIpc(): void {
       assertStrArray(mentions ?? [], 'mentions')
       const chat = db.getChat(chatId)
       if (!chat) throw new Error('会话不存在')
-      if (isTurnRunning(chatId) && chat.type !== 'group')
+      if (isTurnRunning(chatId) && !isGroupDiscussionRunning(chatId))
         throw new Error('当前会话正在回复，请稍后再发送')
-      const images = validateChatImages(attachments)
+      const images = validateChatAttachments(attachments)
       if (!content.trim() && !images.length)
-        throw new Error('请填写消息或添加图片')
+        throw new Error('请填写消息或添加附件')
       // 生成在后台推进，事件通过 CH.event 推送；这里立即返回
       void sendUserMessage(chatId, content, mentions ?? [], images).catch(
         () => undefined,

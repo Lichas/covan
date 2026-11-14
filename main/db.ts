@@ -273,6 +273,121 @@ CREATE TABLE IF NOT EXISTS bot_skills (
   skill_id TEXT NOT NULL REFERENCES installed_skills(id) ON DELETE CASCADE,
   PRIMARY KEY (bot_id, skill_id)
 );
+CREATE TABLE IF NOT EXISTS goals (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  emoji TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  source TEXT NOT NULL DEFAULT 'user_goal',
+  category TEXT NOT NULL DEFAULT '',
+  parent_goal_id TEXT REFERENCES goals(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  fixed_position INTEGER,
+  momentum REAL,
+  session_id TEXT REFERENCES chats(id) ON DELETE SET NULL,
+  owner_agent_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+  last_touched_by_agent_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK (status IN ('ACTIVE','PAUSED','RETIRED','COMPLETED')),
+  CHECK (source IN ('user_goal','assistant_tracking')),
+  CHECK (category IN ('','HEALTH','RELATIONSHIPS','MONEY','CAREER','INTERESTS','PRODUCTIVITY','SOMETHING_ELSE')),
+  CHECK (momentum IS NULL OR (momentum >= 0 AND momentum <= 1)),
+  CHECK (fixed_position IS NULL OR fixed_position >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_goals_scope ON goals(user_id, source, parent_goal_id, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(user_id, status, parent_goal_id, sort_order, id);
+CREATE TABLE IF NOT EXISTS goal_collaborators (
+  goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  PRIMARY KEY (goal_id, bot_id)
+);
+CREATE TABLE IF NOT EXISTS goal_sessions (
+  goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  PRIMARY KEY (goal_id, chat_id)
+);
+CREATE TABLE IF NOT EXISTS goal_artifacts (
+  goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  artifact_type TEXT NOT NULL,
+  artifact_key TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (goal_id, artifact_type, artifact_key),
+  CHECK (artifact_type IN ('cron','document','space'))
+);
+CREATE TABLE IF NOT EXISTS goal_updates (
+  id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL,
+  actor_kind TEXT NOT NULL,
+  author_agent_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+  author_name TEXT NOT NULL DEFAULT '',
+  session_id TEXT REFERENCES chats(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  CHECK (kind IN ('note','created','renamed','status_changed','assignment_changed','artifact_attached','reordered')),
+  CHECK (actor_kind IN ('user','agent','system'))
+);
+CREATE INDEX IF NOT EXISTS idx_goal_updates_goal ON goal_updates(goal_id, created_at DESC, id DESC);
+CREATE TABLE IF NOT EXISTS goal_operations (
+  request_id TEXT PRIMARY KEY,
+  goal_id TEXT REFERENCES goals(id) ON DELETE SET NULL,
+  operation TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  result TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS goal_order_scopes (
+  user_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  parent_goal_id TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (user_id, source, parent_goal_id),
+  CHECK (source IN ('user_goal','assistant_tracking'))
+);
+CREATE TABLE IF NOT EXISTS browser_tasks (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  backend TEXT NOT NULL,
+  label TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'live',
+  started_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_browser_tasks_bot ON browser_tasks(bot_id,started_at);
+CREATE TABLE IF NOT EXISTS browser_activity (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_browser_activity_bot ON browser_activity(bot_id,created_at);
+CREATE TABLE IF NOT EXISTS goal_executions (
+  id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  bot_id TEXT NOT NULL,
+  chat_id TEXT NOT NULL,
+  message_id TEXT,
+  status TEXT NOT NULL,
+  error TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_execution_running ON goal_executions(goal_id) WHERE status='running';
+CREATE INDEX IF NOT EXISTS idx_goal_execution_latest ON goal_executions(goal_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS agent_homes (
+  bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `
 
 /** 打开（必要时创建）数据库并执行 migration。dir 为 userData 目录。 */
@@ -283,6 +398,50 @@ export function initDb(dir: string): Db {
   d.pragma('journal_mode = WAL')
   d.pragma('foreign_keys = ON')
   d.exec(MIGRATION)
+  const executionColumns = d.pragma('table_info(goal_executions)') as { name: string }[]
+  for (const column of ['parent_execution_id', 'prompt', 'request_id']) {
+    if (!executionColumns.some((item) => item.name === column))
+      d.exec(`ALTER TABLE goal_executions ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`)
+  }
+  const executionAdditions: Record<string, string> = {
+    context_json: "TEXT NOT NULL DEFAULT '[]'", reason: "TEXT NOT NULL DEFAULT ''",
+    resume_status: "TEXT NOT NULL DEFAULT ''", pause_owner: "TEXT NOT NULL DEFAULT ''",
+    cli_session_id: "TEXT NOT NULL DEFAULT ''", cli_fingerprint: "TEXT NOT NULL DEFAULT ''",
+    attempt: 'INTEGER NOT NULL DEFAULT 0', active_ms: 'INTEGER NOT NULL DEFAULT 0',
+    started_at: 'INTEGER', updated_at: 'INTEGER NOT NULL DEFAULT 0',
+  }
+  for (const [column, definition] of Object.entries(executionAdditions)) {
+    if (!executionColumns.some((item) => item.name === column))
+      d.exec(`ALTER TABLE goal_executions ADD COLUMN ${column} ${definition}`)
+  }
+  d.exec(`DROP INDEX IF EXISTS idx_goal_execution_running;
+    CREATE UNIQUE INDEX idx_goal_execution_running ON goal_executions(goal_id) WHERE status IN ('queued','running','waiting_experts','waiting_input','paused','blocked','review') AND parent_execution_id='';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_expert_request ON goal_executions(parent_execution_id,request_id) WHERE parent_execution_id!='';
+    CREATE INDEX IF NOT EXISTS idx_goal_execution_message ON goal_executions(message_id);
+    CREATE TABLE IF NOT EXISTS goal_execution_inputs (
+      id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES goal_executions(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL, text TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL, UNIQUE(execution_id,request_id)
+    );
+    CREATE TABLE IF NOT EXISTS goal_execution_reports (
+      id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES goal_executions(id) ON DELETE CASCADE,
+      parent_execution_id TEXT NOT NULL DEFAULT '', attempt INTEGER NOT NULL, status TEXT NOT NULL,
+      payload TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+      UNIQUE(execution_id,attempt,status)
+    );
+    CREATE INDEX IF NOT EXISTS idx_goal_report_inbox ON goal_execution_reports(parent_execution_id,delivered);
+    CREATE INDEX IF NOT EXISTS idx_goal_execution_queue ON goal_executions(status,created_at);`)
+  const inputColumns = d.pragma('table_info(goal_execution_inputs)') as { name: string }[]
+  for (const column of ['source_message_id', 'reply_to_message_id']) {
+    if (!inputColumns.some((item) => item.name === column))
+      d.exec(`ALTER TABLE goal_execution_inputs ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`)
+  }
+  d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_input_source ON goal_execution_inputs(source_message_id) WHERE source_message_id!='';
+    CREATE INDEX IF NOT EXISTS idx_goal_input_pending ON goal_execution_inputs(execution_id,delivered)`)
+
+  d.prepare("UPDATE goal_executions SET started_at=created_at WHERE status='running' AND started_at IS NULL").run()
+
+  d.prepare("UPDATE browser_tasks SET status='interrupted' WHERE status='live'").run()
   const botColumns = d.pragma('table_info(bots)') as { name: string }[]
   for (const [name, fallback] of [['backend', 'api'], ['cli_path', ''], ['cli_access', 'read-only']]) {
     if (!botColumns.some((column) => column.name === name))
@@ -344,6 +503,8 @@ export function initDb(dir: string): Db {
     d.exec("ALTER TABLE messages ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'")
   if (!messageColumns.some((column) => column.name === 'system_kind'))
     d.exec("ALTER TABLE messages ADD COLUMN system_kind TEXT NOT NULL DEFAULT ''")
+  if (!messageColumns.some((column) => column.name === 'goal_input_execution_id'))
+    d.exec("ALTER TABLE messages ADD COLUMN goal_input_execution_id TEXT NOT NULL DEFAULT ''")
   // 仅迁移明确指向 LM Studio 默认端口的旧“OpenAI 兼容”配置。
   d.exec(
     `UPDATE providers SET kind='lm-studio'
@@ -638,6 +799,7 @@ interface ChatRow {
   created_at: number
 }
 interface MessageRow {
+  goal_input_execution_id: string
   id: string
   chat_id: string
   sender_type: string
@@ -699,7 +861,11 @@ function safeJsonArray<T>(raw: string): T[] {
   }
 }
 function toMessage(r: MessageRow): Message {
+  const execution = getDb().prepare('SELECT id FROM goal_executions WHERE message_id=? LIMIT 1').get(r.id) as { id: string } | undefined
+  const input = r.goal_input_execution_id ? getDb().prepare('SELECT delivered FROM goal_execution_inputs WHERE source_message_id=?').get(r.id) as { delivered: number } | undefined : undefined
   return {
+    ...(execution ? { goal_execution_id: execution.id } : {}),
+    ...(r.goal_input_execution_id ? { goal_input_execution_id: r.goal_input_execution_id, goal_input_delivery: input ? input.delivered ? 'delivered' as const : 'pending' as const : 'unavailable' as const } : {}),
     id: r.id,
     chat_id: r.chat_id,
     sender_type: r.sender_type as SenderType,
@@ -1851,6 +2017,7 @@ export function getFitnessSummary(botId: string, days = 30): FitnessSummary {
 // ---------- messages ----------
 
 export interface InsertMessageInput {
+  goal_input_execution_id?: string
   chat_id: string
   sender_type: SenderType
   sender_bot_id?: string | null
@@ -1869,8 +2036,8 @@ export function insertMessage(input: InsertMessageInput): Message {
   return getDb().transaction(() => {
     getDb()
       .prepare(
-        `INSERT INTO messages (id,chat_id,sender_type,sender_bot_id,content,attachments,artifacts,mentions,status,error,system_kind,created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO messages (id,chat_id,sender_type,sender_bot_id,content,attachments,artifacts,mentions,status,error,system_kind,created_at,goal_input_execution_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         id,
@@ -1885,6 +2052,7 @@ export function insertMessage(input: InsertMessageInput): Message {
         input.error ?? '',
         input.system_kind ?? '',
         now,
+        input.goal_input_execution_id ?? '',
       )
     const message = getMessage(id)!
     captureChatMemory(message)
@@ -2219,7 +2387,7 @@ function captureMemory(
 }
 
 function captureChatMemory(message: Message): void {
-  if (message.sender_type === 'system' || message.system_kind === 'welcome')
+  if (message.sender_type === 'system' || message.system_kind === 'welcome' || message.goal_input_execution_id)
     return
   const owners = listMemberBots(message.chat_id).map((bot) => bot.id)
   captureMemory(message, owners, ['user', ...owners], message.sender_bot_id ?? 'user', 'chat', message.chat_id)

@@ -220,8 +220,8 @@ function toolText(result: BashRunResult, relCwd: string): string {
   ].join('\n')
 }
 
-export function createBashTools(botId: string): AgentTool[] {
-  const workspace = fs.realpathSync(ensureWorkspace(botId))
+export function createBashTools(botId: string, workspaceId = botId): AgentTool[] {
+  const workspace = fs.realpathSync(ensureWorkspace(workspaceId))
   return [
     {
       name: 'bash',
@@ -254,7 +254,7 @@ export function createBashTools(botId: string): AgentTool[] {
           cwd?: string
           timeout_seconds?: number
         }
-        const cwd = fs.realpathSync(resolveWorkspaceFile(botId, p.cwd || '.'))
+        const cwd = fs.realpathSync(resolveWorkspaceFile(workspaceId, p.cwd || '.'))
         if (!fs.statSync(cwd).isDirectory()) throw new Error('cwd 必须是已有目录')
         const relCwd = path.relative(workspace, cwd).split(path.sep).join('/')
         const skillDirectories = getBotExtensions(botId).skillIds.flatMap((id) => {

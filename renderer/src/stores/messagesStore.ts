@@ -82,7 +82,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
               ...current.generating,
               [chatId]:
                 !!current.generating[chatId] ||
-                Object.values(streaming).some((m) => m.chat_id === chatId),
+                Object.values(streaming).some((m) => m.chat_id === chatId && !m.goal_execution_id),
             },
             messages: {
               ...current.messages,
@@ -231,7 +231,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
             [ev.chatId]: ev.generating,
           }
           const hasStreaming = Object.values(s.streaming).some(
-            (message) => message.chat_id === ev.chatId,
+            (message) => message.chat_id === ev.chatId && !message.goal_execution_id,
           )
           set({
             turnGenerating,
@@ -259,7 +259,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
         else active.delete(ev.taskId)
         const scheduledRuns = { ...s.scheduledRuns, [ev.chatId]: [...active] }
         const hasStreaming = Object.values(s.streaming).some(
-          (message) => message.chat_id === ev.chatId,
+          (message) => message.chat_id === ev.chatId && !message.goal_execution_id,
         )
         set({
           scheduledRuns,
@@ -286,7 +286,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       case 'message-start':
         set({
           streaming: { ...s.streaming, [ev.message.id]: ev.message },
-          generating: { ...s.generating, [ev.chatId]: true },
+          generating: { ...s.generating, [ev.chatId]: ev.message.goal_execution_id ? !!s.generating[ev.chatId] : true },
         })
         break
       case 'message-delta': {
@@ -307,7 +307,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
         const streaming = { ...s.streaming }
         delete streaming[ev.message.id]
         const hasStreaming = Object.values(streaming).some(
-          (message) => message.chat_id === ev.chatId,
+          (message) => message.chat_id === ev.chatId && !message.goal_execution_id,
         )
         set({
           streaming,

@@ -5,6 +5,7 @@ import type { Bot } from '../shared/types'
 /** 记忆提取 prompt 中的标记（memory 注入，mock 识别后输出 JSON 数组） */
 export const MEMORY_EXTRACT_MARKER = '<<memory-extract>>'
 export const MEMORY_SUMMARY_MARKER = '<<memory-scene-summary>>'
+export const AGENT_HOME_MARKER = '<<agent-home>>'
 
 const PERSONA_REPLIES: { match: RegExp; style: (bot: Bot, user: string) => string }[] = [
   {
@@ -102,6 +103,19 @@ export async function mockComplete(
 ): Promise<string> {
   if (opts.signal?.aborted) return ''
   await new Promise((r) => setTimeout(r, 30))
+  if (systemPrompt.includes(AGENT_HOME_MARKER)) {
+    const name = clip(bot.name, 80)
+    const title = JSON.stringify(`${name} 的主页`)
+    const intro = JSON.stringify(clip(bot.description || '和你一起把重要的事往前推进。', 160))
+    return [
+      '```openui-lang',
+      `root = Card(${title}, [intro, focus, goals])`,
+      `intro = Callout("info", ${JSON.stringify(name)}, ${intro})`,
+      'focus = Text("从一个清晰的下一步开始；目标看板显示的是本机真实记录。")',
+      'goals = GoalsBoard()',
+      '```',
+    ].join('\n')
+  }
   if (systemPrompt.includes(MEMORY_SUMMARY_MARKER)) return mockSceneSummary(userText)
   if (systemPrompt.includes(MEMORY_EXTRACT_MARKER)) return mockMemoryExtraction(bot, userText)
   if (systemPrompt.includes('<<chat-topic-summary>>'))

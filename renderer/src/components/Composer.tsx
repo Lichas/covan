@@ -5,7 +5,7 @@ import { useMessagesStore } from '../stores/messagesStore'
 import { useDraftsStore } from '../stores/draftsStore'
 import { Avatar } from './Avatar'
 import { AtIcon, SendIcon, StopIcon, PlusIcon, CloseIcon, QuoteIcon } from './icons'
-import { ChatImage, attachmentUrl } from './ChatImage'
+import { ChatAttachment, isDocumentAttachment } from './ChatAttachment'
 import { api } from '../lib/api'
 import { MarkdownContent } from './MarkdownContent'
 
@@ -32,13 +32,18 @@ export function Composer({ chat }: Props) {
   const text = draft?.text ?? ''
   const quote = draft?.quote
   const attachments = draft?.attachments ?? []
+  const isGoalFollowUp = !!quote?.goalExecutionId
+  const [sendingFollowUp, setSendingFollowUp] = useState(false)
   const [importing, setImporting] = useState(false)
   const importLock = useRef(false)
   const [imageError, setImageError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
-  useEffect(() => setImageError(''), [chat.id])
+  const activeChat = useRef(chat.id)
+  activeChat.current = chat.id
+  useEffect(() => setImageError(''), [chat.id, quote?.messageId])
+  useEffect(() => setSendingFollowUp(false), [chat.id])
   const addImages = async (files: File[]) => {
-    if (importLock.current || !files.length) return
+    if (importLock.current || sendingFollowUp || !files.length) return
     const targetChatId = chat.id
     importLock.current = true
     setImporting(true)
@@ -47,11 +52,11 @@ export function Composer({ chat }: Props) {
       const previous =
         useDraftsStore.getState().drafts[targetChatId]?.attachments ?? []
       if (previous.length + files.length > 8)
-        throw new Error('每条消息最多 8 张图片')
+        throw new Error('每条消息最多 8 个附件')
       if (files.some((f) => f.size > 16 * 1024 * 1024))
-        throw new Error('每张图片最多 16MB')
+        throw new Error('每个附件最多 16MB')
       for (const file of files) {
-        const image = await api.importChatImage(
+        const image = await api.importChatAttachment(
           file.name,
           new Uint8Array(await file.arrayBuffer()),
         )
@@ -144,7 +149,32 @@ export function Composer({ chat }: Props) {
     }
   }
 
+  const sendFollowUp = async () => {
+    if (!quote || sendingFollowUp || importLock.current) return
+    const reply = text.trim()
+    if (!reply) { setImageError('请填写要补充给此任务的新要求'); return }
+    if (attachments.length) { setImageError('任务补充暂只支持文字，请移除附件或取消引用后普通发送'); return }
+    if (reply.length > 2000) { setImageError('任务补充最多 2000 字'); return }
+    const targetChatId = chat.id, replyToMessageId = quote.messageId
+    const saved = useDraftsStore.getState().drafts[targetChatId]?.goalFollowUpRequest
+    const request = saved?.text === reply && saved.replyToMessageId === replyToMessageId
+      ? saved : { id: crypto.randomUUID(), replyToMessageId, text: reply }
+    setDraft(targetChatId, { goalFollowUpRequest: request })
+    setSendingFollowUp(true); setImageError('')
+    try {
+      await api.sendGoalFollowUp(targetChatId, replyToMessageId, reply, request.id)
+      const current = useDraftsStore.getState().drafts[targetChatId]
+      if (current?.goalFollowUpRequest?.id === request.id && current.text.trim() === reply && current.quote?.messageId === replyToMessageId)
+        clearDraft(targetChatId)
+      await useMessagesStore.getState().loadMessages(targetChatId)
+    } catch (reason) {
+      if (activeChat.current === targetChatId && useDraftsStore.getState().drafts[targetChatId]?.goalFollowUpRequest?.id === request.id)
+        setImageError((reason instanceof Error ? reason.message : String(reason)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, ''))
+    } finally { if (activeChat.current === targetChatId) setSendingFollowUp(false) }
+  }
+
   const doSend = () => {
+    if (isGoalFollowUp) { void sendFollowUp(); return }
     const reply = text.trim()
     const quoted = quote ? `${quote.author}\n${quote.content}`.split('\n').map((line) => `> ${line}`).join('\n') : ''
     const content = [quoted, reply].filter(Boolean).join('\n\n')
@@ -237,10 +267,10 @@ export function Composer({ chat }: Props) {
         ref={fileRef}
         type="file"
         multiple
-        accept="image/png,image/jpeg,image/webp,image/gif"
+        accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.yaml,.yml,.xml,.html,.htm,.css,.scss,.js,.jsx,.ts,.tsx,.mjs,.cjs,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.h,.cpp,.hpp,.cs,.sh,.bash,.zsh,.sql,.toml,.ini,.conf,.log,.vue,.svelte,.r,.tex"
         className="sr-only"
         tabIndex={-1}
-        aria-label="选择图片"
+        aria-label="选择附件"
         onChange={(e) => {
           void addImages(Array.from(e.target.files ?? []))
           e.target.value = ''
@@ -249,12 +279,12 @@ export function Composer({ chat }: Props) {
       {!!attachments.length && (
         <div className="composer-images">
           {attachments.map((item, i) => (
-            <div className="composer-image" key={`${item.path}-${i}`}>
-              <ChatImage src={attachmentUrl(item.path)} alt={item.name} />
+            <div className={isDocumentAttachment(item) ? 'composer-document' : 'composer-image'} key={`${item.path}-${i}`}>
+              <ChatAttachment attachment={item} />
               <button
                 type="button"
                 className="remove-image"
-                aria-label={`移除图片：${item.name}`}
+                aria-label={`移除${isDocumentAttachment(item) ? '附件' : '图片'}：${item.name}`}
                 onClick={() =>
                   setDraft(chat.id, {
                     attachments: attachments.filter((_, index) => index !== i),
@@ -335,7 +365,8 @@ export function Composer({ chat }: Props) {
           <div className="composer-quote" aria-label="引用内容">
             <QuoteIcon size={16} className="shrink-0" />
             <div className="min-w-0 flex-1">
-              <div className="font-medium">{quote.author}</div>
+              <div className="font-medium">{isGoalFollowUp ? `继续此任务 · ${quote.author}` : quote.author}</div>
+              {isGoalFollowUp && <div className="text-xs" role="status">新消息将交给这项任务；暂停时只保存，继续后处理。</div>}
               <div className="composer-quote-text selectable"><MarkdownContent content={quote.content} /></div>
             </div>
             <button className="message-action shrink-0" aria-label="取消引用" title="取消引用" onClick={() => setDraft(chat.id, { quote: null })}>
@@ -348,6 +379,7 @@ export function Composer({ chat }: Props) {
           id="message-composer"
           aria-label="输入消息"
           rows={1}
+          disabled={sendingFollowUp}
           value={text}
           onChange={(e) => {
             setText(e.target.value)
@@ -361,9 +393,9 @@ export function Composer({ chat }: Props) {
             const ta = e.currentTarget
             updateMentionPopup(ta.value, ta.selectionStart ?? ta.value.length)
           }}
-          title="支持 Markdown · 多图粘贴与拖放；Enter 发送，Shift + Enter 换行"
+          title="支持 Markdown · 图片、PDF、文本和代码附件；Enter 发送，Shift + Enter 换行"
           placeholder={
-            isGroup ? '一起讨论点什么？输入 @ 提及成员' : '有什么新想法？'
+            isGoalFollowUp ? '补充这项任务的要求…' : isGroup ? '一起讨论点什么？输入 @ 提及成员' : '有什么新想法？'
           }
           className="selectable max-h-40 flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-relaxed text-stone-800 outline-none placeholder:text-stone-400 dark:text-stone-100"
         />
@@ -371,9 +403,9 @@ export function Composer({ chat }: Props) {
         <button
           type="button"
           className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 disabled:opacity-30 dark:hover:bg-stone-700"
-          aria-label="添加图片"
-          title="添加图片 · 支持多选、粘贴与拖放（最多8张）"
-          disabled={importing || attachments.length >= 8}
+          aria-label="添加附件"
+          title="添加图片、PDF、文本或代码 · 支持多选、粘贴与拖放（最多8个，每个16MB）"
+          disabled={importing || sendingFollowUp || attachments.length >= 8}
           onClick={() => fileRef.current?.click()}
         >
           <PlusIcon width={20} height={20} />
@@ -389,7 +421,7 @@ export function Composer({ chat }: Props) {
             <AtIcon width={18} height={18} />
           </button>
         )}
-        {generating && (
+        {generating && !isGoalFollowUp && (
           <button
             onClick={() => void stop(chat.id)}
             className={`flex items-center gap-1.5 rounded-full bg-stone-700 text-[13px] text-white transition hover:bg-stone-800 dark:bg-stone-200 dark:text-stone-800 dark:hover:bg-stone-300 ${
@@ -402,13 +434,13 @@ export function Composer({ chat }: Props) {
             {!allowDuringGeneration && '停止'}
           </button>
         )}
-        {(!generating || allowDuringGeneration) && (
+        {(!generating || allowDuringGeneration || isGoalFollowUp) && (
           <button
             onClick={doSend}
-            disabled={(!text.trim() && !attachments.length && !quote) || importing}
+            disabled={sendingFollowUp || (!text.trim() && !attachments.length && !quote) || importing}
             className="rounded-full bg-ink p-2 text-white transition enabled:hover:bg-stone-700 disabled:opacity-30 dark:bg-stone-100 dark:text-stone-900 dark:enabled:hover:bg-stone-300"
-            title="发送（Enter）"
-            aria-label="发送"
+            title={isGoalFollowUp ? '发送给此任务（Enter）' : '发送（Enter）'}
+            aria-label={isGoalFollowUp ? '发送给此任务' : '发送'}
           >
             <SendIcon width={17} height={17} />
           </button>

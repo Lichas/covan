@@ -18,6 +18,7 @@ import { formatMessageDay, messageDay } from '../lib/format'
 import { groupBackgroundUrl } from '../lib/groupBackground'
 import { stageUiReply } from '../lib/generativeUi'
 import { Composer } from './Composer'
+import { GoalExecutionTray } from './GoalExecutionTray'
 import { MessageBubble } from './MessageBubble'
 import { GroupAvatar, chatDisplayName } from './Sidebar'
 import { Avatar } from './Avatar'
@@ -162,6 +163,7 @@ export function ChatView({
     useDraftsStore.getState().setDraft(chat.id, {
       quote: {
         messageId: message.id,
+        goalExecutionId: message.goal_execution_id || message.goal_input_execution_id,
         author: message.sender_type === 'user' ? '你' : (chat.member_bots.find((b) => b.id === message.sender_bot_id)?.name ?? 'Bot'),
         content: message.content,
       },
@@ -499,6 +501,7 @@ export function ChatView({
           </button>
         </div>
       )}
+      <GoalExecutionTray key={`tasks-${chat.id}`} chatId={chat.id} />
       <Composer key={chat.id} chat={chat} />
       <AgentConversationDialog
         threadId={privateId}

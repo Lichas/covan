@@ -1,5 +1,5 @@
 // App.tsx — 三栏布局装配 + 启动加载 + 事件订阅 + 全局快捷键
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BotSettingsPanel } from './components/BotSettingsPanel'
 import { ArtifactPreviewPanel } from './components/ArtifactPreviewPanel'
 import { ChatView } from './components/ChatView'
@@ -16,6 +16,8 @@ import { useUiStore } from './stores/uiStore'
 import { useScheduledTasksStore } from './stores/scheduledTasksStore'
 import { api } from './lib/api'
 import { UserProfileDialog } from './components/UserProfileDialog'
+import { BrowserPreviewPanel } from './components/BrowserPreview'
+import { AgentHomeView } from './components/AgentHomeView'
 
 export default function App() {
   // ChatView owns the actions/dialog state; the DM sidebar hosts its toolbar.
@@ -23,6 +25,9 @@ export default function App() {
     useState<HTMLDivElement | null>(null)
   const setNewBotOpen = useUiStore((s) => s.setNewBotOpen)
   const setNewGroupOpen = useUiStore((s) => s.setNewGroupOpen)
+  const agentHomeBotId = useUiStore((s) => s.agentHomeBotId)
+  const activeChatId = useChatsStore((s) => s.activeChatId)
+  const homeOpenedFromChat = useRef<string | null | undefined>(undefined)
 
   // 启动：设置 + bots + chats
   useEffect(() => {
@@ -98,13 +103,35 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [setNewBotOpen, setNewGroupOpen])
 
+  // The page is an alternate view for the currently selected conversation.
+  // Picking another chat from the sidebar returns to the normal chat surface.
+  useEffect(() => {
+    if (!agentHomeBotId) {
+      homeOpenedFromChat.current = undefined
+      return
+    }
+    if (homeOpenedFromChat.current === undefined) {
+      homeOpenedFromChat.current = activeChatId
+      return
+    }
+    if (homeOpenedFromChat.current !== activeChatId)
+      useUiStore.getState().setAgentHomeBotId(null)
+  }, [activeChatId, agentHomeBotId])
+
   return (
     <div className="app-shell flex h-full w-full overflow-hidden">
       <Sidebar />
       <div className="app-content-card">
-        <ChatView actionsTarget={chatActionsTarget} />
-        <BotSettingsPanel onActionsTarget={setChatActionsTarget} />
-        <ArtifactPreviewPanel />
+        {agentHomeBotId ? (
+          <AgentHomeView botId={agentHomeBotId} />
+        ) : (
+          <>
+            <ChatView actionsTarget={chatActionsTarget} />
+            <BotSettingsPanel onActionsTarget={setChatActionsTarget} />
+            <ArtifactPreviewPanel />
+            <BrowserPreviewPanel />
+          </>
+        )}
       </div>
       <SettingsModal />
       <NewBotDialog />

@@ -524,7 +524,9 @@ try {
   console.log('✓ Full-history Markdown export includes unloaded messages')
 
   await page.getByRole('button', { name: '加载更早的消息' }).click()
-  await expect(page.locator('article')).toHaveCount(66)
+  const welcomeCount = await page.evaluate(async (id) => (await window.covan.listMessages(id, undefined, 1000)).filter((message) => message.system_kind === 'welcome').length, fixture.dm.id)
+  const expectedHistoryCount = 66 + welcomeCount
+  await expect(page.locator('article')).toHaveCount(expectedHistoryCount)
   await expect(
     page.getByRole('button', { name: '加载更早的消息' }),
   ).toHaveCount(0)
@@ -538,7 +540,7 @@ try {
   await page.locator('.topic-header-action').click()
   const topicDialog = page.getByRole('dialog', { name: '开始新话题' })
   await expect(topicDialog).toContainText('会保留全部聊天记录')
-  await expect(topicDialog).toContainText('66 条消息')
+  await expect(topicDialog).toContainText(`${expectedHistoryCount} 条消息`)
   await topicDialog.getByRole('button', { name: '压缩并开始' }).click()
   await expect(page.locator('[data-system-kind="topic_boundary"]')).toContainText(
     '新话题',
@@ -549,7 +551,7 @@ try {
     window.covan.getChatTopicState(id), fixture.dm.id)
   assert.equal(topicState.current_message_count, 0)
   assert.ok(topicState.latest_topic.summary.length > 0)
-  assert.equal(await page.locator('article').count(), 66)
+  assert.equal(await page.locator('article').count(), expectedHistoryCount)
   await page.screenshot({ path: path.join(artifacts, 'new-topic.png') })
   console.log('✓ New topic compresses context while preserving visible DM history')
 

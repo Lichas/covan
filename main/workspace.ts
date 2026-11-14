@@ -32,6 +32,19 @@ export function botWorkspaceDir(botId: string): string {
 
 /** 创建 bot 工作区目录（建 bot 时调用） */
 export function ensureWorkspace(botId: string): string {
+  // Host-created task scopes are nested beneath a real Bot workspace. Reject
+  // symlinked scope ancestors rather than treating their target as a new root.
+  const parts = botId.split('/')
+  if (parts.length > 1) {
+    let current = ensureWorkspace(parts[0])
+    for (const part of parts.slice(1)) {
+      if (!part || part === '.' || part === '..' || part.includes('\\')) throw new Error('任务目录无效')
+      current = path.join(current, part)
+      if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) throw new Error('任务目录不允许符号链接')
+      fs.mkdirSync(current, { recursive: true })
+    }
+    return current
+  }
   const dir = botWorkspaceDir(botId)
   fs.mkdirSync(dir, { recursive: true })
   return dir

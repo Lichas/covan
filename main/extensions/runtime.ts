@@ -65,6 +65,7 @@ export async function prepareBotExtensions(
   botId: string,
   signal: AbortSignal,
   scope: ObservationFields,
+  workspaceId = botId,
 ) {
   const config = getBotExtensions(botId)
   const tools: AgentTool[] = []
@@ -128,7 +129,7 @@ export async function prepareBotExtensions(
         server,
         signal,
         scope,
-        ensureWorkspace(botId),
+        ensureWorkspace(workspaceId),
       )
       closeHandlers.push(session.close)
       return { server, session }

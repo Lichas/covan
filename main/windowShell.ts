@@ -10,6 +10,9 @@ let shellWindow: BrowserWindow | null = null
 export function setShellWindow(win: BrowserWindow | null): void {
   shellWindow = win
 }
+export function getShellWindow(): BrowserWindow | null {
+  return shellWindow && !shellWindow.isDestroyed() ? shellWindow : null
+}
 
 /**
  * 标准/更透都使用 sidebar 材质，两者差别在渲染层是否再叠一层自绘淡色；

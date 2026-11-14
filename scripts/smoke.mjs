@@ -34,6 +34,12 @@ function assert(cond, label) {
   }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+function localDateOffset(days) {
+  const date = new Date()
+  date.setHours(12, 0, 0, 0)
+  date.setDate(date.getDate() + days)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
 
 // 1. 打包真实 main 模块（pi/electron/better-sqlite3 等保持 external，由 node_modules 解析）
 await build({
@@ -55,6 +61,14 @@ await build({
     agentTools: path.join(root, 'main/agentTools.ts'),
     scheduledTasks: path.join(root, 'main/scheduledTasks.ts'),
     fitness: path.join(root, 'main/fitness.ts'),
+    goals: path.join(root, 'main/goals.ts'),
+    goalHistory: path.join(root, 'main/goalHistory.ts'),
+    goalExecution: path.join(root, 'main/goalExecution.ts'),
+    chatDocuments: path.join(root, 'main/chatDocuments.ts'),
+    browserTools: path.join(root, 'main/browser/tools.ts'),
+    browserSnapshot: path.join(root, 'main/browser/snapshot.ts'),
+    agentHome: path.join(root, 'main/agentHome.ts'),
+    goalsTools: path.join(root, 'main/goalsTools.ts'),
     welcome: path.join(root, 'main/welcome.ts'),
     toolset: path.join(root, 'main/tools/toolset.ts'),
     notificationText: path.join(root, 'main/notificationText.ts'),
@@ -131,6 +145,15 @@ const scheduledTasks = await import(
 )
 const fitness = await import(
   pathToFileURL(path.join(bundleDir, 'fitness.js')).href,
+)
+const goals = await import(
+  pathToFileURL(path.join(bundleDir, 'goals.js')).href,
+)
+const chatDocuments = await import(pathToFileURL(path.join(bundleDir, 'chatDocuments.js')).href)
+const browserTools = await import(pathToFileURL(path.join(bundleDir, 'browserTools.js')).href)
+const browserSnapshot = await import(pathToFileURL(path.join(bundleDir, 'browserSnapshot.js')).href)
+const agentHome = await import(
+  pathToFileURL(path.join(bundleDir, 'agentHome.js')).href,
 )
 const toolset = await import(
   pathToFileURL(path.join(bundleDir, 'toolset.js')).href,
@@ -216,6 +239,16 @@ console.log('\n[1] 建库 & schema')
     'scheduled_tasks',
     'fitness_profiles',
     'fitness_logs',
+    'goals',
+    'goal_collaborators',
+    'goal_sessions',
+    'goal_artifacts',
+    'goal_updates',
+    'goal_operations',
+    'goal_order_scopes',
+    'goal_executions',
+    'goal_execution_inputs',
+    'browser_activity',
   ]) {
     assert(tables.includes(t), `表 ${t} 已创建`)
   }
@@ -229,6 +262,263 @@ console.log('\n[1] 建库 & schema')
     !db.getSetting('jev_api_key_sealed').includes('jev-smoke-secret'),
     'Jev API Key 加密后写入本地设置',
   )
+}
+
+console.log('\n[1a0] 操作浏览器能力边界')
+{
+  for (const value of ['file:///tmp/test', 'javascript:alert(1)', 'covan-image://local/x', 'https://user:password@example.com']) {
+    let rejected = false
+    try { browserSnapshot.browserUrl(value) } catch { rejected = true }
+    assert(rejected, '浏览器拒绝私有协议、脚本与内嵌凭据')
+  }
+  assert(browserSnapshot.publicUrl('https://example.com/path?token=secret#fragment') === 'https://example.com/path', '模型获得的 URL 不包含查询令牌或片段')
+  assert(browserSnapshot.browserDownloadOrigin('blob:https://example.com/fixture', 'https://example.com/report') === 'https://example.com', '浏览器支持同站点生成的 Blob 下载')
+  let foreignBlob = false
+  try { browserSnapshot.browserDownloadOrigin('blob:https://other.example/fixture', 'https://example.com/report') } catch { foreignBlob = true }
+  assert(foreignBlob, 'Blob 下载拒绝不匹配的站点来源')
+  const signal = new AbortController()
+  const privateTools = toolset.createAgentToolset({ botId: 'fixture', chatId: 'fixture', signal: signal.signal, privateConversation: true })
+  assert(!privateTools.some((tool) => tool.name.startsWith('browser_')), 'Agent 私聊不装配可操作浏览器')
+  const received = [], released = []
+  browserTools.configureBrowserController(async (context, command) => { received.push({ context, command }); return { ok: true } }, (scope) => released.push(scope))
+  const browser = browserTools.createBrowserTools({ botId: 'fixture', chatId: 'fixture', signal: signal.signal })
+  const open = browser.find((tool) => tool.name === 'browser_open')
+  await open.execute('fixture', { url: 'https://example.com', action: 'untrusted-action' })
+  assert(received[0].command.action === 'open' && received[0].context.botId === 'fixture', '工具名决定动作且 Bot/会话作用域不由模型指定')
+  for (let index = 1; index < 40; index++) await open.execute('fixture', { url: 'https://example.com' })
+  let exceeded = false
+  try { await open.execute('fixture', { url: 'https://example.com' }) } catch { exceeded = true }
+  assert(exceeded && received.length === 40, '每轮浏览器调用数受限，越界不会进入执行器')
+  browserTools.releaseBrowserTools(signal.signal)
+  assert(released.includes(received[0].context.scopeId), '轮次结束释放浏览器作用域')
+  signal.abort()
+  let cancelled = false
+  try { await open.execute('fixture', { url: 'https://example.com' }) } catch { cancelled = true }
+  assert(cancelled && received.length === 40, '已取消运行不能继续调用浏览器')
+}
+
+console.log('\n[1a] 文档附件与目标执行保护')
+{
+  const document = await chatDocuments.storeChatAttachment(Buffer.from('const answer = 42\n// 第二行'), 'source.ts')
+  const preview = chatDocuments.readChatDocument(document.path)
+  assert(preview.text.includes('L2: // 第二行') && document.kind === 'document', '代码附件提取可追溯的行号')
+  assert(chatDocuments.validateChatAttachments([{ ...document, name: '伪造来源名', mime: 'image/png' }])[0].name === 'source.ts', '发送时由主进程恢复文档真实元数据')
+  const budget = { remaining: 5 }
+  const first = chatDocuments.attachmentContent([document], budget)[0]
+  const omitted = chatDocuments.attachmentContent([document], budget)[0]
+  assert(JSON.parse(first.text).truncated && JSON.parse(omitted.text).text.includes('重新附上'), '附件上下文预算与省略均明确标注')
+  const outside = path.join(userData, 'outside.txt')
+  fs.writeFileSync(outside, 'not an attachment')
+  const link = path.join(userData, 'chat-documents', '00000000-0000-0000-0000-000000000000.txt')
+  fs.symlinkSync(outside, link)
+  let rejected = false
+  try { chatDocuments.readChatDocument('chat-documents/' + path.basename(link)) } catch { rejected = true }
+  assert(rejected, '文档附件拒绝符号链接越界')
+  const owner = db.createBot({ name: '执行保护测试' })
+  const taskScope = `${owner.id}/tasks/scoped-execution`
+  workspace.ensureWorkspace(taskScope)
+  const scopedWrite = workspace.createWorkspaceTools(taskScope).find((tool) => tool.name === 'workspace_write')
+  let scopeEscapeRejected = false
+  try { await scopedWrite.execute('scope-escape', { path: '../sibling.txt', content: 'no' }) } catch { scopeEscapeRejected = true }
+  assert(scopeEscapeRejected, '目标文件工具拒绝访问相邻任务目录')
+  const outsideScope = path.join(workspace.ensureWorkspace(owner.id), 'linked-scope')
+  fs.symlinkSync(userData, outsideScope)
+  let rootLinkRejected = false
+  try { workspace.ensureWorkspace(`${owner.id}/linked-scope/execution`) } catch { rootLinkRejected = true }
+  assert(rootLinkRejected, '任务目录本身的符号链接不能成为新的工作区根')
+
+  const chat = db.createDm(owner.id)
+  const goal = goals.createGoal({ title: '恢复目标执行', ownerAgentId: owner.id }, { kind: 'user' })
+  const run = goals.beginGoalExecution(goal.id, owner.id, chat.id, goal.version)
+  let statusRejected = false
+  try { goals.updateGoal(goal.id, { status: 'COMPLETED' }, { kind: 'agent', botId: owner.id }) } catch { statusRejected = true }
+  assert(statusRejected, '执行下一步期间 Bot 不能自行完成整个目标')
+  const input = goals.addExecutionInput(run.id, '重点比较定价', 'input-1')
+  assert(goals.addExecutionInput(run.id, '重点比较定价', 'input-1').id === input.id, '补充要求重试幂等')
+  let differentRejected = false
+  try { goals.addExecutionInput(run.id, '其他内容', 'input-1') } catch { differentRejected = true }
+  assert(differentRejected, '同一请求标识不能替换补充内容')
+  assert(goals.takeExecutionInputs(run.id).length === 1 && goals.takeExecutionInputs(run.id).length === 0, '补充要求仅送达一次执行步骤')
+  const expert = goals.beginExpertExecution(run, owner.id, 'expert-1', '独立咨询')
+  assert(goals.latestGoalExecution(goal.id).id === run.id, '专家执行不会覆盖目标主责执行')
+  assert(goals.listGoalExecutions(chat.id).some((item) => item.id === expert.id && item.parentExecutionId === run.id), '专家关系可从持久化记录恢复')
+
+  goals.claimExecution(expert.id)
+  goals.recoverGoalExecutions()
+  assert(goals.getGoal(goal.id).execution.status === 'paused' && goals.getGoal(goal.id).status === 'ACTIVE', '重启将未完成执行暂停且保留目标状态')
+  assert(goals.executionById(expert.id).status === 'paused' && goals.executionById(run.id).inputs.length === 1, '重启恢复保留专家与补充记录')
+  goals.recoverGoalExecutions()
+  assert(goals.latestGoalExecution(goal.id).id === run.id, '重复恢复不创建新的执行或重放任务')
+  let staleRejected = false
+  try { goals.beginGoalExecution(goal.id, owner.id, chat.id, goal.version) } catch { staleRejected = true }
+  assert(staleRejected, '过期目标版本不能启动执行')
+  let invalidTransition = false
+  try { goals.transitionExecution(run.id, 'done') } catch { invalidTransition = true }
+  assert(invalidTransition, '暂停任务不能跳过执行和验收直接完成')
+  goals.transitionExecution(run.id, 'queued')
+  const resumed = goals.claimExecution(run.id)
+  assert(resumed.attempt === 2 && resumed.id === run.id, '恢复保持执行 ID 并隔离新的运行次数')
+  const activeBefore = resumed.activeMs
+  goals.addExecutionActiveTime(run.id, 1, 60000)
+  assert(goals.executionById(run.id).activeMs === activeBefore, '旧阶段不能重复计入新阶段预算')
+  goals.addExecutionActiveTime(run.id, resumed.attempt, 123)
+  assert(goals.executionById(run.id).activeMs === activeBefore + 123, '活跃预算增量持久化，不按离线墙钟推算')
+  const secondInput = goals.addExecutionInput(run.id, '检查点送达要求', 'checkpoint-input')
+  const inbox = goals.executionInbox(run.id)
+  goals.checkpointExecution(run.id, 1, inbox)
+  assert(!goals.executionById(run.id).inputs.find((item) => item.id === secondInput.id).delivered, '旧运行回调不能确认新输入')
+  goals.checkpointExecution(run.id, resumed.attempt, inbox, false)
+  assert(!goals.executionById(run.id).inputs.find((item) => item.id === secondInput.id).delivered, '未确认检查点不能吞掉输入')
+  goals.checkpointExecution(run.id, resumed.attempt, inbox)
+  assert(goals.executionById(run.id).inputs.find((item) => item.id === secondInput.id).delivered, '输入随真实上下文原子确认')
+  goals.saveExecutionCliSession(run.id, resumed.attempt, 'fixture-cli-session', 'fixture-fingerprint')
+  assert(goals.getExecutionCheckpoint(run.id).cliSessionId === 'fixture-cli-session', '任务 CLI 续接 ID 独立保存')
+  goals.transitionExecution(expert.id, 'queued'); goals.claimExecution(expert.id)
+  goals.transitionExecution(expert.id, 'done')
+  const report = goals.executionById(expert.id)
+  const updatesBefore = goals.getGoal(goal.id).updates.length
+  goals.publishExecutionReport(report, '专家实际报告')
+  goals.publishExecutionReport(report, '专家实际报告')
+  assert(goals.getGoal(goal.id).updates.length === updatesBefore + 1, '专家报告重试只回写一次进展')
+  const reports = goals.executionInbox(run.id)
+  assert(reports.filter((item) => item.covanReportId).length === 1, '报告收件箱持久保存并去重')
+  goals.checkpointExecution(run.id, resumed.attempt, [...inbox, ...reports])
+  assert(goals.executionInbox(run.id).length === 0, '真实报告随上下文确认送达')
+  goals.transitionExecution(run.id, 'review')
+  goals.transitionExecution(run.id, 'done')
+  assert(goals.getGoal(goal.id).status === 'ACTIVE', '本轮验收不自动完成整个目标')
+  const { repairGoalHistory } = await import(pathToFileURL(path.join(bundleDir, 'goalHistory.js')).href)
+  const interrupted = { role: 'assistant', content: [{ type: 'toolCall', id: 'successful', name: 'workspace_write', arguments: {} }, { type: 'toolCall', id: 'unknown', name: 'bash', arguments: {} }], stopReason: 'aborted' }
+  const successful = { role: 'toolResult', toolCallId: 'successful', toolName: 'workspace_write', content: [{ type: 'text', text: '实际成功结果' }] }
+  const repaired = repairGoalHistory([interrupted, successful, { role: 'user', content: '继续', timestamp: 1 }])
+  assert(repaired[1] === successful && repaired[2].toolCallId === 'unknown' && repaired[2].isError && repaired[3].role === 'user', '恢复保留成功结果、补齐未知结果并保持合法消息顺序')
+  const execution = await import(pathToFileURL(path.join(bundleDir, 'goalExecution.js')).href)
+  const followGoal = goals.createGoal({ title: '输入来源与事务', ownerAgentId: owner.id }, { kind: 'user' })
+  const followRun = goals.beginGoalExecution(followGoal.id, owner.id, chat.id)
+  const reply = db.insertMessage({ chat_id: chat.id, sender_type: 'bot', sender_bot_id: owner.id, content: '已有任务成果' })
+  goals.setGoalExecutionMessage(followRun.id, reply.id)
+  goals.transitionExecution(followRun.id, 'paused')
+  const beforeMessages = db.listMessages(chat.id).length
+  db.getDb().exec(`CREATE TRIGGER fixture_fail_followup BEFORE INSERT ON goal_execution_inputs
+    WHEN NEW.request_id='rollback-followup' BEGIN SELECT RAISE(ABORT,'fixture rollback'); END;`)
+  const beforeFollowUpEvents = events.length
+  let rolledBack = false
+  try { execution.sendGoalFollowUp(chat.id, reply.id, '事务回滚补充', 'rollback-followup') } catch { rolledBack = true }
+  db.getDb().exec('DROP TRIGGER fixture_fail_followup')
+  assert(rolledBack && db.listMessages(chat.id).length === beforeMessages && !goals.executionById(followRun.id).inputs.length, '收件箱失败会回滚聊天消息和任务状态')
+  assert(events.length === beforeFollowUpEvents, '回滚不泄漏事件或记忆摘要调度')
+  const followMessage = execution.sendGoalFollowUp(chat.id, reply.id, '真实聊天补充', 'followup-retry')
+  assert(followMessage.goal_input_execution_id === followRun.id && followMessage.goal_input_delivery === 'pending', '后续消息具有真实任务来源与待处理回执')
+  assert(!db.listMemories(owner.id).some(item => item.source_id === followMessage.id), '任务补充留在任务上下文，不变成普通聊天自动记忆')
+  const inputReceipt = goals.executionById(followRun.id).inputs[0]
+  assert(inputReceipt.sourceMessageId === followMessage.id && inputReceipt.replyToMessageId === reply.id, '收件箱保留来源和引用消息')
+  assert(goals.executionById(followRun.id).status === 'paused', '后续消息不绕过暂停')
+  goals.checkpointExecution(followRun.id, followRun.attempt, goals.executionInbox(followRun.id))
+  assert(db.getMessage(followMessage.id).goal_input_delivery === 'delivered', '聊天回执随真实检查点确认')
+  goals.transitionExecution(followRun.id, 'stopped')
+  assert(execution.sendGoalFollowUp(chat.id, reply.id, '真实聊天补充', 'followup-retry').id === followMessage.id, '终态之后重试原请求仍返回原消息')
+  let changedReplyRejected = false
+  try { execution.sendGoalFollowUp(chat.id, followMessage.id, '真实聊天补充', 'followup-retry') } catch { changedReplyRejected = true }
+  assert(changedReplyRejected, '相同请求标识不能改投其他引用')
+  goals.deleteGoal(followGoal.id, { kind: 'user' })
+  assert(db.getMessage(followMessage.id).goal_input_execution_id === followRun.id && db.getMessage(followMessage.id).goal_input_delivery === 'unavailable', '删除目标仍保留消息来源，不转成普通聊天输入')
+
+  const queuedGoals = ['新目标先入队', '已有目标补充'].map(title => goals.createGoal({ title, ownerAgentId: owner.id }, { kind: 'user' }))
+  const queuedRuns = queuedGoals.map(item => goals.beginGoalExecution(item.id, owner.id, chat.id, undefined, 'queued'))
+  goals.addExecutionInput(queuedRuns[1].id, '用户等待处理的要求', 'priority-input')
+  assert(goals.pendingExecutionIds()[0] === queuedRuns[1].id && goals.executionById(queuedRuns[1].id).queuePosition === 1, '已有任务的用户补充优先，队列位置与真实顺序一致')
+  for (const item of queuedGoals) goals.deleteGoal(item.id, { kind: 'user' })
+  goals.deleteGoal(goal.id, { kind: 'user' })
+  db.deleteBot(owner.id)
+}
+
+console.log('\n[1b1] Goals：共享存储、权限、关联和排序')
+{
+  const owner = db.createBot({ name: '目标主责冒烟' })
+  const collaborator = db.createBot({ name: '目标协作冒烟' })
+  const outsider = db.createBot({ name: '目标旁观冒烟' })
+  const chat = db.createDm(owner.id)
+  const normalTools = toolset.createAgentToolset({
+    botId: owner.id, chatId: chat.id, signal: new AbortController().signal,
+  })
+  const privateTools = toolset.createAgentToolset({
+    botId: owner.id, chatId: chat.id, signal: new AbortController().signal, privateConversation: true,
+  })
+  assert(
+    ['list_goals', 'get_goal', 'create_goal', 'update_goal', 'add_goal_update', 'attach_artifact'].every((name) => normalTools.some((tool) => tool.name === name)) &&
+      !privateTools.some((tool) => tool.name === 'create_goal'),
+    '普通 API Bot 获得 Goals 工具，Agent 私聊保持只读',
+  )
+  const created = goals.createGoal({
+    title: '每周跑步三次',
+    category: 'HEALTH',
+    ownerAgentId: owner.id,
+    collaboratorAgentIds: [collaborator.id],
+    sessionId: chat.id,
+    subGoals: [{ title: '安排固定日' }, { title: '准备跑鞋' }],
+  }, { kind: 'user', chatId: chat.id })
+  assert(
+    created.title === '每周跑步三次' && created.subGoals?.length === 2 &&
+      created.ownerAgentId === owner.id && created.collaboratorAgentIds[0] === collaborator.id,
+    '创建目标、协作者和一级子目标原子落库',
+  )
+  const listed = goals.listGoals({ source: 'user_goal', status: ['ACTIVE'] })
+  assert(listed.goals.some((goal) => goal.id === created.id) && listed.nextCursor === null, '目标列表按来源和状态读取真实数据')
+  const progressed = goals.updateGoal(created.id, { status: 'PAUSED', momentum: 0.35 }, {
+    kind: 'agent', botId: owner.id, chatId: chat.id,
+  }, created.version)
+  assert(progressed.status === 'PAUSED' && progressed.momentum === 0.35 && progressed.version === created.version + 1, '主责 Bot 可更新状态与动量并递增版本')
+  let forbidden = false
+  try {
+    goals.addGoalUpdate(progressed.id, '旁观 Bot 不能写入', { kind: 'agent', botId: outsider.id, chatId: chat.id }, progressed.version)
+  } catch { forbidden = true }
+  assert(forbidden, '非协作者 Bot 不能写入进展')
+  const note = goals.addGoalUpdate(progressed.id, '已安排周二、周四、周日跑步。', {
+    kind: 'agent', botId: collaborator.id, chatId: chat.id,
+  }, progressed.version)
+  const afterNote = goals.getGoal(progressed.id)
+  assert(note.text.includes('周二') && afterNote.updates?.some((entry) => entry.id === note.id), '协作者写入的进展可从详情回读')
+  const reassigned = goals.updateGoal(afterNote.id, { collaboratorAgentIds: [] }, { kind: 'user', chatId: chat.id }, afterNote.version)
+  assert(
+    reassigned.collaboratorAgentIds.length === 0 && reassigned.updates?.some((entry) => entry.kind === 'assignment_changed'),
+    '协作者变更写入真实活动记录',
+  )
+  const task = db.saveScheduledTask({
+    bot_id: owner.id,
+    chat_id: chat.id,
+    title: '跑步提醒',
+    prompt: '提醒用户完成本周跑步计划',
+    schedule: 'cron',
+    cron: '0 20 * * 2,4,0',
+  })
+  const linked = goals.attachGoalArtifact(reassigned.id, { type: 'cron', id: task.id }, { kind: 'user', chatId: chat.id }, reassigned.version)
+  assert(linked.artifacts?.some((artifact) => artifact.type === 'cron' && artifact.id === task.id), '目标关联已有定时任务而不创建副本')
+  const duplicateLink = goals.attachGoalArtifact(linked.id, { type: 'cron', id: task.id }, { kind: 'user', chatId: chat.id }, linked.version)
+  assert(duplicateLink.version === linked.version && duplicateLink.artifacts?.length === linked.artifacts?.length, '重复关联不重复写入活动或版本')
+  const second = goals.createGoal({ title: '读完两本书', source: 'user_goal' }, { kind: 'user', chatId: chat.id })
+  goals.reorderGoals([second.id, linked.id], 'user_goal', null, { kind: 'user', chatId: chat.id })
+  const reordered = goals.listGoals({ source: 'user_goal', status: ['ACTIVE', 'PAUSED'] }).goals
+  assert(reordered.findIndex((goal) => goal.id === second.id) < reordered.findIndex((goal) => goal.id === linked.id), '用户排序写入同一分区且可回读')
+  let stale = false
+  try { goals.updateGoal(linked.id, { status: 'ACTIVE' }, { kind: 'user' }, linked.version) } catch { stale = true }
+  assert(stale, '旧版本写入被拒绝，避免覆盖新进展')
+  const inherited = goals.createGoal({
+    title: '继承父目标协作范围', parentGoalId: created.id, source: 'assistant_tracking',
+    category: 'MONEY', ownerAgentId: outsider.id, collaboratorAgentIds: [collaborator.id],
+  }, { kind: 'user', chatId: chat.id })
+  assert(
+    inherited.source === 'user_goal' && inherited.category === 'HEALTH' &&
+      inherited.ownerAgentId === owner.id && inherited.collaboratorAgentIds.length === 0,
+    '子目标继承父目标来源、分类和协作范围',
+  )
+  const childId = created.subGoals?.[0]?.id
+  if (childId) goals.deleteGoal(childId, { kind: 'user' })
+  assert(goals.getGoal(created.id).subGoals?.length === 2, '删除子目标不会删除父目标')
+  db.deleteBot(owner.id)
+  const ownerDeleted = goals.getGoal(created.id)
+  assert(ownerDeleted.ownerAgentId === null && ownerDeleted.title === created.title, '删除 Bot 不删除共享目标')
+  db.deleteBot(collaborator.id)
+  db.deleteBot(outsider.id)
 }
 
 console.log('\n[1b] 成熟内容偏好与伴侣模板')
@@ -368,6 +658,9 @@ console.log('\n[1b2] 健身教练档案、记录与工具')
     tags: coach.tags,
     system_prompt: coach.prompt,
   })
+  const firstFitnessDate = localDateOffset(-5)
+  const secondFitnessDate = localDateOffset(-2)
+  const toolFitnessDate = localDateOffset(-1)
   const savedProfile = db.saveFitnessProfile({
     bot_id: coachBot.id,
     age: 30,
@@ -391,7 +684,7 @@ console.log('\n[1b2] 健身教练档案、记录与工具')
   )
   const firstLog = db.saveFitnessLog({
     bot_id: coachBot.id,
-    date: '2026-10-20',
+    date: firstFitnessDate,
     weight_kg: 72.5,
     waist_cm: 80,
     sleep_hours: 7.2,
@@ -401,7 +694,7 @@ console.log('\n[1b2] 健身教练档案、记录与工具')
   })
   db.saveFitnessLog({
     bot_id: coachBot.id,
-    date: '2026-10-27',
+    date: secondFitnessDate,
     weight_kg: 71.8,
     waist_cm: 79,
     sleep_hours: 7.5,
@@ -411,14 +704,14 @@ console.log('\n[1b2] 健身教练档案、记录与工具')
   })
   const sameDay = db.saveFitnessLog({
     bot_id: coachBot.id,
-    date: '2026-10-20',
+    date: firstFitnessDate,
     weight_kg: 72.4,
     note: '同一天更新',
   })
   const summary = db.getFitnessSummary(coachBot.id, 30)
   assert(
     sameDay.id === firstLog.id &&
-      summary.logs.filter((log) => log.date === '2026-10-20').length === 1,
+      summary.logs.filter((log) => log.date === firstFitnessDate).length === 1,
     '同一天重复记录更新而不是新增',
   )
   assert(
@@ -453,13 +746,13 @@ console.log('\n[1b2] 健身教练档案、记录与工具')
   assert(parsedProfile.plan.includes('周日复盘'), 'fitness_profile 工具更新计划')
   const logResult = await logTool.execute(
     'fitness-log',
-    { date: '2026-10-28', weight_kg: 71.6, steps: 10000 },
+    { date: toolFitnessDate, weight_kg: 71.6, steps: 10000 },
     new AbortController().signal,
   )
   const parsedLog = JSON.parse(logResult.content[0].text)
   assert(
     parsedLog.log.weight_kg === 71.6 &&
-      parsedLog.summary.logs.some((log) => log.date === '2026-10-28'),
+      parsedLog.summary.logs.some((log) => log.date === toolFitnessDate),
     'fitness_log 工具写入并返回摘要',
   )
   const summaryResult = await summaryTool.execute(
@@ -937,6 +1230,26 @@ assert(botB.response_decision_strategy === 'auto', 'Bot 默认自动优先使用
 assert(kimiBot.reasoning_effort === 'medium', 'Kimi Bot 默认也使用中等推理')
 assert(kimiBot.max_tokens === 1_000_000, 'Kimi Bot 默认最大输出为 1M Token')
 db.deleteBot(kimiBot.id)
+
+console.log('\n[2a] Agent 主页：受校验的 OpenUI 布局与持久化')
+{
+  const fallbackHome = agentHome.getAgentHome(botA.id)
+  assert(
+    fallbackHome.isFallback && fallbackHome.content.includes('GoalsBoard()') && !fallbackHome.generatedAt,
+    '首次读取返回不含业务数据的本地主页模板',
+  )
+  const generatedHome = await agentHome.regenerateAgentHome(botA.id)
+  assert(
+    !generatedHome.isFallback && generatedHome.content.includes('```openui-lang') && generatedHome.content.includes('GoalsBoard()'),
+    'Bot 生成的主页经 OpenUI 校验后写入 SQLite',
+  )
+  const restoredHome = agentHome.getAgentHome(botA.id)
+  assert(
+    restoredHome.content === generatedHome.content && restoredHome.generatedAt === generatedHome.generatedAt,
+    '重新读取复用已保存主页而不依赖聊天记录',
+  )
+}
+
 const largeBudgetBot = db.createBot({ name: '1M 输出预算', provider_id: provider.id, max_tokens: 1_000_000 })
 assert(largeBudgetBot.max_tokens === 1_000_000, '新建 Bot 可保存 1M 输出预算')
 db.updateBot(largeBudgetBot.id, { max_tokens: 8192 })

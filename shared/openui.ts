@@ -37,11 +37,47 @@ export const Steps = defineComponent({ name: 'Steps', description: '步骤列表
 export const Choices = defineComponent({ name: 'Choices', description: '让用户选择一项，每项点击后填入回复草稿。', props: z.object({ prompt: short, options: z.array(short).min(1).max(8) }), component: null })
 export const Form = defineComponent({ name: 'Form', description: '收集最多8项文字信息，fields 使用 {label, placeholder} 对象，label 不重复。提交仅填入回复草稿。', props: z.object({ title: short, fields: z.array(z.object({ label: short, placeholder: z.string().max(200) })).min(1).max(8) }), component: null })
 
+// ── Goals (controlled local actions) ──────────────────────────────────────
+// These components are deliberately declarative. The renderer reads real data
+// through the typed IPC bridge, and every write is initiated by a human click.
+const goalStatus = z.enum(['ACTIVE', 'PAUSED', 'RETIRED', 'COMPLETED'])
+const goalSource = z.enum(['user_goal', 'assistant_tracking'])
+const goalCategory = z.enum(['HEALTH', 'RELATIONSHIPS', 'MONEY', 'CAREER', 'INTERESTS', 'PRODUCTIVITY', 'SOMETHING_ELSE'])
+export const GoalsBoard = defineComponent({
+  name: 'GoalsBoard',
+  description: '显示本机真实目标看板。source/status 仅用于筛选；模型不能在组件中提供目标数据或 ID。',
+  props: z.object({ source: goalSource.optional(), status: z.array(goalStatus).min(1).max(4).optional() }),
+  component: null,
+})
+export const GoalCreateCard = defineComponent({
+  name: 'GoalCreateCard',
+  description: '目标创建草稿。用户可编辑后点击“确认创建”才写入本机 GoalsStore；title 为空时显示空白创建表单。',
+  props: z.object({
+    title: z.string().max(120).optional(),
+    category: goalCategory.optional(),
+    source: goalSource.optional(),
+    subGoals: z.array(z.object({ title: short, emoji: z.string().max(16).optional() })).max(3).optional(),
+  }),
+  component: null,
+})
+export const GoalDetail = defineComponent({
+  name: 'GoalDetail',
+  description: '显示一个真实目标详情。goalId 必须来自本轮 list_goals/get_goal 工具结果，界面会重新读取存储中的真实内容。',
+  props: z.object({ goalId: z.string().uuid() }),
+  component: null,
+})
+export const GoalConfirmDelete = defineComponent({
+  name: 'GoalConfirmDelete',
+  description: '删除一个真实目标前的确认卡。goalId 必须来自工具结果；用户点击确认后才删除目标及子目标，不会删除任务或文件。',
+  props: z.object({ goalId: z.string().uuid() }),
+  component: null,
+})
+
 const leafUnion = z.union([
   Text.ref, Metric.ref, Callout.ref, Tag.ref, List.ref, Separator.ref,
   Table.ref, BarChart.ref, LineChart.ref, AreaChart.ref, PieChart.ref,
   RadarChart.ref, RadialChart.ref, ScatterChart.ref, Steps.ref,
-  Choices.ref, Form.ref,
+  Choices.ref, Form.ref, GoalsBoard.ref, GoalCreateCard.ref, GoalDetail.ref, GoalConfirmDelete.ref,
 ])
 
 // ── Layout containers ─────────────────────────────────────────────────────
@@ -60,7 +96,7 @@ const tabContentUnion = z.union([
   Text.ref, Metric.ref, Callout.ref, Tag.ref, List.ref, Separator.ref,
   Table.ref, BarChart.ref, LineChart.ref, AreaChart.ref, PieChart.ref,
   RadarChart.ref, RadialChart.ref, ScatterChart.ref, Steps.ref,
-  Choices.ref, Form.ref, Stack.ref,
+  Choices.ref, Form.ref, GoalsBoard.ref, GoalCreateCard.ref, GoalDetail.ref, GoalConfirmDelete.ref, Stack.ref,
 ])
 
 export const TabItem = defineComponent({
@@ -99,7 +135,7 @@ export const Card = defineComponent({
       Text.ref, Metric.ref, Callout.ref, Tag.ref, List.ref, Separator.ref,
       Table.ref, BarChart.ref, LineChart.ref, AreaChart.ref, PieChart.ref,
       RadarChart.ref, RadialChart.ref, ScatterChart.ref, Steps.ref,
-      Choices.ref, Form.ref, Stack.ref, Tabs.ref, Accordion.ref,
+      Choices.ref, Form.ref, GoalsBoard.ref, GoalCreateCard.ref, GoalDetail.ref, GoalConfirmDelete.ref, Stack.ref, Tabs.ref, Accordion.ref,
     ])).min(CARD_CHILD_MIN).max(CARD_CHILD_MAX),
   }),
   component: null,
@@ -111,13 +147,14 @@ export const uiDefinitions = [
   Table, BarChart, LineChart, AreaChart, PieChart, RadarChart, RadialChart, ScatterChart,
   StepsItem, Steps,
   Stack, TabItem, Tabs, AccordionItem, Accordion,
-  Choices, Form,
+  Choices, Form, GoalsBoard, GoalCreateCard, GoalDetail, GoalConfirmDelete,
 ]
 
 const leafNames = new Set([
   'Text', 'Metric', 'Callout', 'Tag', 'List', 'Separator',
   'Table', 'BarChart', 'LineChart', 'AreaChart', 'PieChart',
   'RadarChart', 'RadialChart', 'ScatterChart', 'Steps', 'Choices', 'Form',
+  'GoalsBoard', 'GoalCreateCard', 'GoalDetail', 'GoalConfirmDelete',
 ])
 const stackChildNames = new Set(leafNames)
 const tabContentNames = new Set([...leafNames, 'Stack'])
@@ -160,10 +197,11 @@ export const uiSpec = createLibrary({
     },
     {
       name: 'Interaction',
-      components: ['Choices', 'Form'],
+      components: ['Choices', 'Form', 'GoalsBoard', 'GoalCreateCard', 'GoalDetail', 'GoalConfirmDelete'],
       notes: [
         '选项和表单只把内容填入用户的回复草稿，等待用户发送；不代表已执行、已保存或已创建任务。',
         '所有表单字段都是普通文本，不收集密码、API Key 或其他密钥。',
+        'Goals 组件是例外：用户点击受控按钮后通过本地 IPC 读取或写入 GoalsStore。模型只能声明筛选、草稿或从真实工具结果得到的 goalId，不能把文本或按钮当作已完成写入。',
       ],
     },
   ],
@@ -278,7 +316,7 @@ export function validateUiSource(source: string): void {
       case 'Null': return null
       case 'Arr': return node.els.map((item) => evaluate(item, path, level + 1))
       case 'Obj': {
-        if (node.entries.some(([key]) => !['label', 'placeholder'].includes(key))) throw new Error('界面字段不受支持')
+        if (node.entries.some(([key]) => !['label', 'placeholder', 'title', 'emoji'].includes(key))) throw new Error('界面字段不受支持')
         return Object.fromEntries(node.entries.map(([key, value]) => [key, evaluate(value, path, level + 1)]))
       }
       case 'Ref': {

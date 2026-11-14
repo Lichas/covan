@@ -6,6 +6,11 @@ import type {
   BotCreateInput,
   FitnessLogInput,
   FitnessProfileInput,
+  GoalArtifactInput,
+  GoalCreateInput,
+  GoalListOptions,
+  GoalPatch,
+  GoalSource,
   GroupReplyMode,
   CovanApi,
   CovanEvent,
@@ -15,6 +20,20 @@ import type {
 } from '../shared/types'
 
 const api: CovanApi = {
+  openBrowser: (botId) => ipcRenderer.invoke(CH.openBrowser, botId),
+  setBrowserBackend: (botId, backend) => ipcRenderer.invoke(CH.setBrowserBackend, botId, backend),
+  getBrowserFrame: (botId, taskId) => ipcRenderer.invoke(CH.getBrowserFrame, botId, taskId),
+  sendBrowserInput: (botId, taskId, frameId, input) => ipcRenderer.invoke(CH.sendBrowserInput, botId, taskId, frameId, input),
+  takeOverBrowser: (botId) => ipcRenderer.invoke(CH.takeOverBrowser, botId),
+  showBrowserNative: (botId) => ipcRenderer.invoke(CH.showBrowserNative, botId),
+  getBrowserState: (botId) => ipcRenderer.invoke(CH.getBrowserState, botId),
+  navigateBrowser: (botId, url) => ipcRenderer.invoke(CH.navigateBrowser, botId, url),
+  setBrowserControl: (botId, mode) => ipcRenderer.invoke(CH.setBrowserControl, botId, mode),
+  setBrowserPolicy: (botId, policy) => ipcRenderer.invoke(CH.setBrowserPolicy, botId, policy),
+  completeBrowserHandoff: (botId, id, completed) => ipcRenderer.invoke(CH.completeBrowserHandoff, botId, id, completed),
+  respondBrowserApproval: (botId, id, approved) => ipcRenderer.invoke(CH.respondBrowserApproval, botId, id, approved),
+  closeBrowser: (botId) => ipcRenderer.invoke(CH.closeBrowser, botId),
+  resetBrowserSession: (botId) => ipcRenderer.invoke(CH.resetBrowserSession, botId),
   nativeGlass: process.platform === 'darwin',
   probeLocalCli: (kind, executablePath) => ipcRenderer.invoke(CH.probeLocalCli, kind, executablePath),
   listLocalCliModels: (kind, executablePath) => ipcRenderer.invoke(CH.listLocalCliModels, kind, executablePath),
@@ -31,6 +50,14 @@ const api: CovanApi = {
   setBotExtensions: (botId, config) => ipcRenderer.invoke(CH.setBotExtensions, botId, config),
   importChatImage: (name, bytes) =>
     ipcRenderer.invoke(CH.importChatImage, name, bytes),
+  importChatAttachment: (name, bytes) => ipcRenderer.invoke(CH.importChatAttachment, name, bytes),
+  readChatDocument: (path) => ipcRenderer.invoke(CH.readChatDocument, path),
+  runGoalNextStep: (id, expectedVersion) => ipcRenderer.invoke(CH.runGoalNextStep, id, expectedVersion),
+  controlGoalExecution: (id, action) => ipcRenderer.invoke(CH.controlGoalExecution, id, action),
+  stopGoalExecution: (id) => ipcRenderer.invoke(CH.stopGoalExecution, id),
+  listGoalExecutions: (chatId) => ipcRenderer.invoke(CH.listGoalExecutions, chatId),
+  sendGoalFollowUp: (chatId, replyToMessageId, text, requestId) => ipcRenderer.invoke(CH.sendGoalFollowUp, chatId, replyToMessageId, text, requestId),
+  sendGoalExecutionInput: (executionId, text, requestId) => ipcRenderer.invoke(CH.sendGoalExecutionInput, executionId, text, requestId),
   getUserProfile: () => ipcRenderer.invoke(CH.getUserProfile),
   saveUserProfile: (profile) => ipcRenderer.invoke(CH.saveUserProfile, profile),
   pickUserAvatar: () => ipcRenderer.invoke(CH.pickUserAvatar),
@@ -67,6 +94,28 @@ const api: CovanApi = {
     ipcRenderer.invoke(CH.deleteFitnessLog, id),
   getFitnessSummary: (botId: string, days?: number) =>
     ipcRenderer.invoke(CH.getFitnessSummary, botId, days),
+  getAgentHome: (botId: string) => ipcRenderer.invoke(CH.getAgentHome, botId),
+  regenerateAgentHome: (botId: string) =>
+    ipcRenderer.invoke(CH.regenerateAgentHome, botId),
+  listGoals: (options?: GoalListOptions) => ipcRenderer.invoke(CH.listGoals, options),
+  getGoal: (id: string) => ipcRenderer.invoke(CH.getGoal, id),
+  createGoal: (input: GoalCreateInput) => ipcRenderer.invoke(CH.createGoal, input),
+  updateGoal: (id: string, patch: GoalPatch, expectedVersion?: number) =>
+    ipcRenderer.invoke(CH.updateGoal, id, patch, expectedVersion),
+  deleteGoal: (id: string, expectedVersion?: number) =>
+    ipcRenderer.invoke(CH.deleteGoal, id, expectedVersion),
+  addGoalUpdate: (id: string, text: string, expectedVersion?: number) =>
+    ipcRenderer.invoke(CH.addGoalUpdate, id, text, expectedVersion),
+  attachGoalArtifact: (
+    id: string,
+    artifact: GoalArtifactInput,
+    expectedVersion?: number,
+  ) => ipcRenderer.invoke(CH.attachGoalArtifact, id, artifact, expectedVersion),
+  reorderGoals: (
+    orderedIds: string[],
+    source: GoalSource,
+    parentGoalId?: string | null,
+  ) => ipcRenderer.invoke(CH.reorderGoals, orderedIds, source, parentGoalId),
   expandAvatarPrompt: (botId, direction) =>
     ipcRenderer.invoke(CH.expandAvatarPrompt, botId, direction),
   // providers

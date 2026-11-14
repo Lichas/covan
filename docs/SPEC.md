@@ -214,6 +214,24 @@ CREATE TABLE fitness_logs (
 );
 ```
 
+### 3.1 Goals（`main/goals.ts`）
+
+Goals 使用 settings 中自动生成的 `goals_user_id` 作为当前本机 profile 的稳定所有者；调用方不能提供或切换该值。迁移新增 `goals`、`goal_collaborators`、`goal_sessions`、`goal_artifacts`、`goal_updates`、`goal_operations` 和 `goal_order_scopes`：
+
+- `goals` 保存标题、摘要/说明/emoji、状态、来源、分类、一级 `parent_goal_id`、同级 `sort_order`、预留 `fixed_position`、`momentum`、创建会话、主责 Bot、最后触达 Bot、乐观锁 `version` 与时间。根目标和子目标分别按 `(user_id, source, parent_goal_id)` 排序；列表只返回根目标，详情返回一级子目标。
+- `goal_collaborators` 与 `goal_sessions` 是目标到 Bot/会话的去重关联；`goal_artifacts` 以 `(goal_id, artifact_type, artifact_key)` 唯一保存经服务校验后的展示快照；`goal_updates` 保存系统活动或进展及作者快照。删除目标级联删除它们，删除 Bot 将主责/作者置空并删除协作者关系，不删除目标；删除会话将创建会话置空并删除会话关联。
+- `goal_operations` 和 `goal_order_scopes` 已为操作幂等和排序修订预留表。当前版本只用排序修订记录排序范围；一次性审批、操作结果重放和游标过期协议尚未启用。
+- 来源是 `user_goal | assistant_tracking`；状态是 `ACTIVE | PAUSED | RETIRED | COMPLETED`；分类是 `HEALTH | RELATIONSHIPS | MONEY | CAREER | INTERESTS | PRODUCTIVITY | SOMETHING_ELSE`。标题为 1–120 字符，摘要 500、说明 10,000、进展 2,000、emoji 16；动量为 0–1 的有限数。子目标继承父目标的来源、主责和协作者，当前最大深度为根加一级，创建根目标时最多附带 3 个子目标。
+- 状态转换为 ACTIVE→PAUSED/COMPLETED/RETIRED、PAUSED→ACTIVE/COMPLETED/RETIRED、COMPLETED→ACTIVE/RETIRED、RETIRED→ACTIVE。父子状态互不自动改变；同值更新不写重复活动。删除目标不会删除实际定时任务、文档或聊天消息。
+
+### 3.2 Agent 主页（`main/agentHome.ts`）
+
+`agent_homes` 以 `bot_id` 为主键保存每个 Bot 的一份 OpenUI 源码、生成时间和更新时间；Bot 删除时级联删除主页。它只保存已通过本地白名单校验的展示声明，不保存目标快照、聊天正文、记忆、工具调用或运行函数。
+
+- 首次读取没有记录时，服务返回不落库的安全模板：一张 `Card`、角色简介与 `GoalsBoard()`。模板不是模型生成结果。
+- 重新生成只把 Bot 的人设和固定主页任务交给一次无工具、无聊天记录/记忆的 `completeOnce`；结果必须恰好含一块闭合的 `openui-lang` 围栏，且通过 `validateUiSource`。`Choices`、`Form`、`GoalCreateCard`、`GoalDetail`、`GoalConfirmDelete` 在主页中被拒绝，避免把对话草稿或单目标写入流程放进主页。
+- `GoalsBoard` 是声明式受控例外：主页源码不能携带目标行或 ID；renderer 中固定组件仍通过 Goals IPC 查询实际数据，写入只由用户点击触发。生成失败或校验失败保留上一次有效主页；首次失败继续展示本地模板与错误。
+
 ## 4. IPC 接口契约（preload 暴露 `window.covan`）
 
 `shared/types.ts` 是可编译的完整接口，`shared/ipcChannels.ts` 是通道白名单；本节记录行为分组与关键签名。任何 IPC 变更必须在同一提交同步 main、preload、shared 和 renderer。
@@ -249,6 +267,26 @@ interface CovanApi {
   saveFitnessLog(input: FitnessLogInput): Promise<FitnessLog>;
   deleteFitnessLog(id: string): Promise<void>;
   getFitnessSummary(botId: string, days?: number): Promise<FitnessSummary>;
+
+  // Agent 主页：每个 Bot 一份经过校验的 OpenUI 布局。
+  getAgentHome(botId: string): Promise<AgentHome>;
+  regenerateAgentHome(botId: string): Promise<AgentHome>;
+
+  // Goals：所有方法都经主进程 GoalsService，以当前本机用户身份执行。
+  listGoals(options?: GoalListOptions): Promise<GoalsListResponse>;
+  getGoal(id: string): Promise<Goal>;
+  runGoalNextStep(id: string, expectedVersion?: number): Promise<GoalExecution>;
+  stopGoalExecution(id: string): Promise<void>;
+  controlGoalExecution(executionId: string, action: 'pause' | 'resume' | 'stop' | 'accept'): Promise<GoalExecution>;
+  listGoalExecutions(chatId: string): Promise<GoalExecution[]>;
+  sendGoalExecutionInput(executionId: string, text: string, requestId: string): Promise<GoalExecutionInput>;
+  sendGoalFollowUp(chatId: string, replyToMessageId: string, text: string, requestId: string): Promise<Message>;
+  createGoal(input: GoalCreateInput): Promise<Goal>;
+  updateGoal(id: string, patch: GoalPatch, expectedVersion?: number): Promise<Goal>;
+  deleteGoal(id: string, expectedVersion?: number): Promise<void>;
+  addGoalUpdate(id: string, text: string, expectedVersion?: number): Promise<GoalUpdate>;
+  attachGoalArtifact(id: string, artifact: GoalArtifactInput, expectedVersion?: number): Promise<Goal>;
+  reorderGoals(orderedIds: string[], source: GoalSource, parentGoalId?: string | null): Promise<void>;
 
   // providers
   listProviders(): Promise<Provider[]>;
@@ -290,7 +328,7 @@ interface CovanApi {
   getChatTopicState(chatId: string): Promise<ChatTopicState>;
   startChatTopic(chatId: string): Promise<StartChatTopicResult>;
   sendUserMessage(chatId: string, content: string, mentions: string[], attachments?: Attachment[]): Promise<void>;
-  stopChat(chatId: string): Promise<void>;             // 停止该会话所有进行中的生成
+  stopChat(chatId: string): Promise<void>;             // 停止该会话普通/定时生成；目标任务独立停止
 
   // memory
   listMemories(botId: string): Promise<Memory[]>;
@@ -329,6 +367,10 @@ type CovanEvent =
   | { type: 'bot-updated'; botId: string }
   | { type: 'scheduled-tasks-updated'; taskId?: string }
   | { type: 'fitness-updated'; botId: string }
+  | { type: 'goal-updated'; goalId: string; version: number }
+  | { type: 'goal-deleted'; goalId: string }
+  | { type: 'goals-reordered'; source: GoalSource; parentGoalId: string | null }
+  | { type: 'agent-home-updated'; botId: string }
   | { type: 'notification-click'; chatId: string }
   | { type: 'system-message'; chatId: string; message: Message };
 ```
@@ -397,6 +439,37 @@ Bot 的最大输出预算支持 64–1000000（1M）的整数，新建 Bot 默�
 - Choices 按钮与 Form 提交把人类可读内容追加至所属会话的输入草稿，并附来源消息引用；群聊同时记录并插入 @来源 Bot。保留已有正文、附件、提及，不直接发送或执行工具/定时任务。用户通过正常发送操作确认，沿用现有群聊规则。群成员离开后不再提供该消息的交互入口。
 - 未提交表单状态仅在当前界面内维护；重载后从组件初值重新填写。生成的回复草稿沿用现有持久化，重载不会重复提交或调用模型；不同消息/围栏/群成员的表单互不共享。
 
+### 5.4b Goals：本机共享目标（G1 第一批）
+
+- **任务状态机与异步派单（2026-11-02）**：`runGoalNextStep(id, expectedVersion?)` 由用户启动 ACTIVE 且有有效主责的目标，先持久化为 queued，优先处理未送达用户补充，再领取专家，同优先级按入队顺序 FIFO 领取。每目标最多一个未结束的根执行；重复启动返回原执行。全局最多两项主责阶段、四项实际运行（含专家）；等待、暂停、阻塞和待验收不占执行名额，满额任务留在持久队列中。
+- 执行状态为 `queued | running | waiting_experts | waiting_input | paused | blocked | review | done | error | stopped`。状态转换由主进程统一校验。主责生成最终结果且没有未完成专家时进入 review，由用户「验收本轮」置 done；不自动完成 Goal。专家成功直接 done。失败进入 error，可显式重试同一执行；停止为 stopped，不自动重启。Goal 仍与执行状态独立。
+- 主责 API 工具 `consult_goal_expert` 校验用户配置的协作 Bot 后持久化独立子执行，立即返回派单 ID/当前状态，不等待报告；同一调用键重试复用派单，不同参数复用键拒绝。每根最多 3 项专家派单，专家不得递归派单或修改目标/用户资料。`wait_goal_experts` 使主责让出名额等待；主责自然结束但仍有未结束专家时也进入 waiting_experts。专家完成/失败/停止后的真实报告和文件引用持久化到收件箱，在下一模型步骤送达；等待中的主责在专家全部结算后自动排队恢复并汇总，无需用户发送“继续”。暂停、等待用户或已停止的主责不因专家结果自行运行。
+- `request_goal_input(question)` 和 `block_goal_task(reason)` 让执行保存上下文后进入 waiting_input/blocked，不靠自由文本猜测状态。`sendGoalExecutionInput(executionId, text, requestId)` 支持根与专家的未结束执行，按执行与请求 ID 去重；给等待输入、阻塞或待验收任务补充后继续排队，给 paused 任务补充只保存，仍须用户继续。未引用任务的普通 Composer 消息维持普通聊天，不猜测任务归属。
+- **应用内后续消息路由（2026-11-02）**：引用后台任务回复或此前的任务补充时，普通输入框明确显示「继续此任务」；发送通过 `sendGoalFollowUp(chatId, replyToMessageId, text, requestId)` 直达原执行，不启动普通聊天轮次。主进程按真实引用关系解析目标并校验同会话、有效执行、目标主责／专家范围；只支持 1–2000 字的新补充，附件须移除或取消引用后按普通聊天发送，不静默丢弃附件。取消引用恢复普通聊天；无引用的普通消息不推测归属。
+- 后续消息、任务收件箱和唤醒状态在同一 SQLite 事务保存，提交后才发事件和调度；按执行／请求键去重，同键不同正文或不同引用拒绝。重试已提交请求返回同一聊天消息，不重复派发，即使任务后来已经验收／停止。消息永久标注任务来源，避免目标删除后补充被重新解释成普通聊天；输入记录保存来源消息和引用消息，展示待处理／已送达／关联已失效。暂停任务只保存新补充，已停止／已验收任务拒绝新补充并保留草稿，不能通过引用扩大授权或复活终态。
+- 用户给 waiting_experts 的执行补充会将其重新排队，先处理新要求，未完成专家仍保留；报告和其他资料不绕过等待用户／暂停状态。调度在既有并发上限内优先处理已有任务的未送达用户补充，再领取其他专家和新目标；同优先级按入队顺序，队列位置使用同样顺序。
+- `controlGoalExecution(executionId, action)` 为用户命名 IPC，action 是 `pause | resume | stop | accept`。暂停取消当前调用并保存执行上下文，继续使用相同 executionId、目录和真实历史；不是创建新任务或从头执行。主责暂停/停止传播到其专家；单独暂停/停止专家不影响其他目标，主责继续时只恢复因该主责暂停的专家，不恢复用户单独暂停的专家。等待输入须先补充；error 可由用户重试，done/stopped 不自动复活。验收仅对没有未完成专家的 review 根执行开放；补充修改意见可从 review 回到 queued。
+- 每项执行使用独立 runtime/session、`tasks/<executionId>/` 和取消信号。API 完整步骤与输入/报告送达标记在同一事务保存，恢复时带入真实工具结果；中断且没有结果的工具调用标为“结果未知，先核对”，不自动重放。CLI 的任务会话 ID 单独持久化，不覆盖 bot/chat 普通会话；补充要求在当前 CLI 调用结束后处理，批量要求一起送入下一调用。每项累计活跃执行最多十分钟，等待、暂停与应用离线不耗用此时长；活跃时长每秒持久化并在阶段结束补齐，崩溃最多损失一秒采样。预算耗尽进入 error，需用户结束本轮后另开执行。
+- `goal_executions` additive 字段保存上下文检查点、原因、暂停前状态、运行次数、活跃时长与 CLI 续接；`goal_execution_inputs` 保存用户补充及来源／引用消息 ID，`messages.goal_input_execution_id` 独立保留来源标记，`goal_execution_reports` 保存专家报告及幂等送达。`listGoalExecutions(chatId)` 返回最近执行、同类队列位置、原因、输入与专家关系；任务卡可补充、暂停、继续、停止和验收。后台消息带只读 `goal_execution_id`，不锁普通聊天；任务阶段复用同一消息，实际文件按成功工具结果关联目标，专家报告保留作者。
+- 正常退出取消实际执行并保存为 paused，崩溃恢复也将已开始但未结束的计算暂停，保留检查点、待处理要求和专家报告，不自动重放。尚未开始的 queued 任务可在应用启动后按原授权首次执行；waiting_input/blocked/review 保持等待，因主责暂停而挂起的专家不抢跑。清空/删除会话、删除相关 Bot、完成/改派/删除目标取消相关执行；暂停 Goal 暂停相关执行，恢复 Goal 后仍由用户继续任务。独立定时任务语义不变。
+
+- **同 profile 单实例**：主进程设置 userData 后、打开数据库与恢复任务前获取 Electron 单实例锁；同 profile 的第二实例只唤起原窗口并退出，不执行迁移／恢复／调度。不同临时 profile 可独立运行。开发重启脚本等待旧实例释放，超过五秒仍未退出才清理该仓库的旧开发进程，再启动新版本。任务补充和后台结果均不作为普通聊天历史或新话题摘要的待回复输入；任务补充只保存在执行上下文／收件箱，不额外写入普通聊天自动记忆或启动其摘要。
+
+- `shared/types.ts` 定义 `Goal`、`GoalUpdate`、`GoalArtifact`、创建/更新/查询输入和上述 IPC；`main/goals.ts` 是唯一的领域服务。renderer、API Bot 与未来协作 worker 不能直接读 SQLite 或自行生成 ID、时间和用户身份。
+- API Bot 的普通会话工具集装配 `list_goals`、`get_goal`、`create_goal`、`update_goal`、`delete_goal`、`add_goal_update`、`attach_artifact`、`reorder_goals`。读取与写入均调用同一服务：创建后当前 Bot 成为主责；主责或协作者只能更新状态、摘要、说明、emoji、动量、追加进展或关联内容。改名、改派、协作者变更、删除和排序不由 Agent 工具执行，删除/排序工具仅返回「需要用户确认」；Agent 私聊和本地 CLI 都不装配 Goals 工具。
+- 当前用户经命名 IPC 可创建、更新、删除、追加活动、关联与重排。每次更新、追加或关联可带 `expectedVersion`；版本不一致时拒绝写入并要求刷新。写入成功后服务返回真实实体/活动，并在提交后发送 `goal-updated`、`goal-deleted` 或 `goals-reordered`。卡片监听这些事件后重新 `getGoal`/`listGoals`，事件是刷新信号，不是事实源。
+- `listGoals` 只查询当前本机用户的根目标，`source` 可选、`status` 省略时为 ACTIVE/PAUSED、单页 1–100（默认 50）；`nextCursor` 是与当前来源和状态筛选绑定的不透明 offset 游标。`getGoal` 返回真实子目标、最多 50 条最新活动和关联。当前游标尚不在排序写入后返回过期错误，调用者应写后重新查询。
+- 可关联已存在的 `scheduled_tasks`（cron 或单次）和经工作区 realpath 边界校验的 Bot 文档；重复关联不增加版本或活动。`space` 仅保留类型，当前明确拒绝。暂停或完成目标不改变关联的定时任务。
+- OpenUI 组件名为 `GoalsBoard`、`GoalCreateCard`、`GoalDetail`、`GoalConfirmDelete`。模型最多提供筛选、创建草稿或真实 ID，实体展示由组件调用 IPC 读取；看板分「我的目标 / 助手跟踪」，创建卡可提交标题、分类、来源、负责 Bot 和最多 3 条子目标，详情按关联内容、子目标、活动的顺序显示。卡片在消息未完成、失败或停止时禁用；普通 `Choices` 与 `Form` 继续只填入 Composer 草稿。
+- 删除始终先在详情显示 `GoalConfirmDelete`，用户点击确认才调用 `deleteGoal`；当前直接用户点击是确认边界，尚未实现跨重载的一次性审批令牌或请求幂等记录。看板筛选/分页控件、详情新增子目标/关联控件、固定位置属于后续工作，不能由模型文本假装已完成。
+
+### 5.4c Agent 个人主页：持久化 OpenUI 布局
+
+- 右侧 Bot 资料可打开该 Bot 的全页「Agent 主页」。首次打开读取安全模板后异步请求 Bot 生成自己的主页；用户可随时点击「刷新主页」再次生成，切换聊天或返回聊天离开该视图。
+- `AgentHome` 的 `content` 是单块、完整、静态的 `openui-lang` 声明。主页用与聊天相同的 React/OpenUI renderer，但不属于消息、不会写入会话、不会发送 Composer 草稿；主页可展示角色说明、静态展示组件和 `GoalsBoard`。
+- 主进程在写入前校验源码，并拒绝通用对话表单与目标创建/详情/删除卡。模型不能指定 IPC、SQL、函数、任意 HTML/JS、目标数据或目标 ID。`GoalsBoard` 的数据读取、完成/暂停/删除等动作继续走 §5.4b 的真实 GoalsService 和本地事件刷新。
+- 生成使用无工具、无聊天记录、无记忆的单次 completion，失败不会覆盖上一份有效主页；没有 Provider 或首次生成失败时，用户仍可在模板中的真实目标看板查看和操作目标。成功写入后发送 `agent-home-updated`，当前页及其他打开该 Bot 主页的 renderer 重新读取。
+
 ### 5.4 本地 CLI 运行后端（main/cli/）
 
 - 每个 Bot 有一种运行方式 `backend`：`api`（默认，走 Provider）或 `codex-cli` / `claude-cli`（正文由本机已登录的 CLI 生成）。CLI Bot 仍可配置 Provider，用于「是否发言 / 是否续发」判断以及上下文、记忆等内部摘要，不影响正文生成。所有内部 Provider completion 统一使用显式或默认判断用 Provider 的默认模型，不透传 CLI 模型名，也不修改持久配置。`cli_access` 为 `read-only`（默认）或 `workspace-write`；`cli_path` 为空时在 PATH 中按命令名查找。
@@ -415,7 +488,7 @@ Bot 的最大输出预算支持 64–1000000（1M）的整数，新建 Bot 默�
 
 ### 6.1 归属与即时写入
 
-- 消息状态进入 `done` 时同步写入实际参与 Bot 的记忆：人和 Bot 单聊写入该 Bot；群消息写入当时全部成员（含未发言成员）；Bot 私聊问题和成功回复分别写入双方。`system`、流式中间态、失败与停止的残缺回复不提取为事实。已送达的问题在接收方失败时仍保留。
+- 普通消息状态进入 `done` 时同步写入实际参与 Bot 的记忆（带任务来源标记的定向补充使用任务自身上下文，不走普通聊天自动记忆）：人和 Bot 单聊写入该 Bot；群消息写入当时全部成员（含未发言成员）；Bot 私聊问题和成功回复分别写入双方。`system`、流式中间态、失败与停止的残缺回复不提取为事实。已送达的问题在接收方失败时仍保留。
 - 消息与所有参与 Bot 记忆副本在一个 SQLite transaction 中写入并一起回滚，使用 source_id 幂等去重；不自动共享给未参与的 Bot，不把私聊转述写进全局 user_memories。用户侧保留原始聊天记录；显式的「关于我」共同记忆维持原接口。
 - 升级使用 additive migration，旧 memories 原样归入长期层。首次升级按已存 agent_threads 的真实双方补入已完成的私聊记录（过期记录随后清理）；不猜测历史群成员，不读取外部 profile。
 
@@ -462,6 +535,13 @@ Bot 的最大输出预算支持 64–1000000（1M）的整数，新建 Bot 默�
 
 ## 7. 工作区（workspace.ts）
 
+### 聊天文档附件（2026-10-29）
+
+- 输入框支持选择、拖入、粘贴 PNG/JPEG/WebP/GIF、PDF、UTF-8 文本及常用代码/配置文件；每条消息混合最多 8 个、每文件非空且不超过 16MB。原 `importChatImage` 保持兼容；新 `importChatAttachment(name, bytes)` 在主进程校验文件类型和大小，不接受任意本机路径。不支持 Office 二进制格式，须先导出 PDF/文本。
+- 文档原文件与提取文字保存在本机 `chat-documents/`，使用主进程生成 UUID，相对路径和 realpath 校验，消息和草稿只存附件元数据（kind/size/pages/truncated 为可选兼容字段）。`readChatDocument(path)` 仅返回该附件的原名和已提取文字，不返回任意宿主文件。预览用纯文本显示，HTML/代码不执行；导出聊天时复制原附件并生成普通链接，图片仍生成图片链接。
+- PDF 在无 Node/preload/真实登录态的独立隐藏 Chromium 会话中用本地 PDF.js 提取，所有外网请求拒绝；禁用 PDF JS 求值，最多 200 页、20 秒。每文件最多提取 60,000 字符，截断在卡片和模型上下文中说明；加密、损坏、扫描无文字或超限明确报错，不静默送出空文档。不包含 OCR。
+- PDF 按真实页码标注 `[第 N 页]`，文本/代码按 `L1:` 等行号标注。单聊、群聊及定时/目标运行的历史重建都将提取文字作为不可信资料注入，最新附件优先，总文档文字最多 120,000 字符；较早省略项明确提示重新上传。引用格式为 `[文件名，第 N 页]` 或 `[文件名，L起始-L结束]`，不把附件指令视为用户授权。文档转成文本供模型阅读，不要求视觉能力；图片仍使用视觉输入并保留原模型能力校验。来源标注是模型生成，需以预览原文核对。
+
 - 根目录：默认 `~/.covans/workspaces/<botId>/`（测试可用 `COVAN_USER_DATA_DIR` 覆盖），创建 Bot 时自动建。应用数据库、头像和聊天图片同属 `~/.covans/`；目录不存在时启动自动创建。
 - Agent 的文件工具只能使用该目录内的相对路径，词法路径检查后还要用 realpath 防止符号链接逃逸。
 - 面板可列文件（深度 2）、预览文本文件（<=200KB）、`openWorkspace` 打开系统文件夹。
@@ -480,6 +560,24 @@ Bot 的最大输出预算支持 64–1000000（1M）的整数，新建 Bot 默�
 - 全应用同时只允许一个打印流程，包含文件选择、文档加载和系统对话框；重复请求返回忙碌错误。准备阶段限时 30 秒；关闭窗口、取消系统对话框返回 `cancelled`，错误返回 `failed` 与可读提示，成功只表示 `submitted`（已提交系统打印队列），不承诺设备已出纸。原文不记入日志，临时窗口与 session 处理器在终态清理。打印不是 Agent 工具，不允许模型静默触发。
 
 ## 8. Agent Runtime 集成（agentRuntime.ts）— 基于 pi-mono 调研结论（2026-09，已确认）
+
+### 可操作浏览器（2026-10-29）
+
+#### 浏览器 Adapter、预览投流与接管（2026-10-30）
+
+- Browser Broker 通过 `BrowserAdapter` 访问页面协议、导航、展示和下载。当前提供内置 Chromium 与本机 Chrome/Edge 两个 Adapter，按 Bot 选择并持久化；切换前须结束运行并关闭旧会话，不转移 Cookie。Chrome 使用应用独立的持久 profile 与继承 FD 的 CDP pipe，不开放调试端口，也不读取用户默认浏览器资料。沙箱/远端 Adapter 为后续扩展，当前不显示为可用能力。
+- 每轮首次浏览器调用生成绑定 chat/message 的任务记录。聊天显示真实浏览器卡片（动作、站点、当前控制权与画面），打开后在聊天右侧查看同一会话。卡片元数据持久化，JPEG 帧仅内存保存，最多保留12轮；关闭或重启后旧卡显示预览失效，不假称仍是实时画面。
+- 投流是 Adapter 提供的页面画面经主进程 IPC 传给用户视图，最高约3帧/秒，按可见订阅拉取并合并并发请求，关闭面板/不可见卡停止拉取；不向模型返回图像，不记录画面或人工输入。所有控制输入通过主进程核验当前会话、human 控制权、最近帧与导航版本；旧卡片、旧画面、关闭后的输入拒绝执行。页面像素坐标按真实视口映射，支持点击、滚动、键盘、文本粘贴及中文输入。
+- 侧栏「接管浏览器」暂停原轮次（10分钟上限），Agent 不读取或操作；用户可在投流画面或本地原生窗口操作。交还后重新观察页面、继续原轮次，不重放接管前动作。停止/取消/关闭使等待失效。原有显式撤销 API 继续用于停止与老调用，不自动恢复已停止任务。
+
+
+- 浏览器工作台由可信 React 工具栏与 Adapter 的真实页面构成；内置模式为无 preload/Node 的沙箱 WebContentsView，每 Bot 独立持久 Chromium partition；本机模式为独立 Chrome/Edge profile。两者保存各自登录态，不读取用户默认浏览器资料。用户主动打开默认为 human，普通 API Agent 可用 `browser_*` 启动；Agent 私聊和 CLI 不装配。
+- **执行模式**：`BrowserPolicy=auto|confirm`，默认 auto，按 Bot 保存在 settings 的 `browser_policy_<botId>`，重启保留。`setBrowserPolicy` 仅由用户命名 IPC 调用，模型不能更改。auto 下打开网站、跨站 HTTP(S) 导航、点击、填写、选择、上传与下载自动执行，不逐步弹确认；confirm 保留原一次性审批、scope/origin/epoch 和参数核验。切换模式使旧审批失效，不将待批准动作自动放行。auto 是浏览器动作策略，不是完整 Sentinel，也不承诺识别所有付款/外发/删除业务语义。
+- **登录/验证接管**：主进程在发送页面快照给模型前，用固定、无模型代码的检测器识别可见登录密码表单、OTP、人机验证和可识别的扫码页；自动切到 human 并生成 `BrowserHandoff`（随机 ID、kind=login|verification|control、origin、chat/message ID、10 分钟期限），显示在浏览器侧栏和对应的 streaming Bot 消息内。未自动识别的站点可由 Agent 调用 `browser_handoff` 请求登录/验证。卡片由主进程事实驱动，模型不能伪造卡片或完成登录。
+- 用户在真实网页手动输入密码/验证码；不经过聊天或模型。点击「登录完成，继续」调用 `completeBrowserHandoff(botId,id,completed)`；主进程核验卡片身份/活性及登录挑战已消失，重新读取当前页面，让原工具调用和原 Agent 轮次自动继续，不另造用户消息，也无需用户再发送“继续”。等待期间允许用户导航完成登录，多次导航不取消卡片；不会重放登录前已执行的点击。取消、停止、关闭、清除登录态、超时或进程重启均停止等待，不自动恢复旧动作。未完成登录时拒绝继续并保持卡片。
+- 用户通过预览或原生页面接管时立即撤销在途审批和 Agent 操作权，生成 control 接管等待；交还后返回新快照，旧动作不重放。显式停止/撤销 API 终止等待，Agent 不在 human 模式读取页面。每 Bot 一轮独占，运行结束释放 scope；auto 下一轮无需重新授权访问，confirm 下一轮重新请求站点许可。模型只获得经裁剪的可访问性树/受控引用，不提供任意 JS、Cookie、请求头或宿主文件读取；密码/验证码等字段不提供填写引用，任何输入框的当前值不返回给模型。
+- `browser_open/snapshot/click/fill/select/upload/wait/downloads/handoff` 使用最新快照引用，动作前后核验目标；遮挡/页面变化/过期引用要求重新观察。Agent 上传限 Bot 工作区 realpath 边界内不超过32MB普通文件，执行前核验内容 hash；下载（HTTP(S) 和同源 Blob）进入唯一工作区路径、不覆盖/不自动打开，最多32MB；confirm 时逐次确认，auto 时自动保存。真实下载产物继续走交付卡与 Goals。
+- 最多4个工作台、每轮40次工具调用、快照80个操作目标/20,000字文本、普通审批120秒、登录等待10分钟、加载30秒。近期活动只记录动作类别/结果/时间。检测并不保证覆盖所有网站；复杂 iframe/弹窗可显式请求人工接管。网站自身脚本/网络副作用不由宿主全面约束，Mac 应用控制不在本轮范围。
 
 **包（新 scope，旧 @mariozechner/* 已废弃，必须用新名）：**
 - `@earendil-works/pi-ai`（统一 LLM 层，纯 JS 零原生依赖）
@@ -547,7 +645,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 **Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。OpenAI-compatible 支持 API Key 留空的本地服务：模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。LM Studio 预设为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`，不直接使用 LM Studio 原生 `/api/v1/chat`。
 
-**进行中任务表**：Agent 层维护 `Map<chatId, Set<AbortController>>`；编排层为每个进行中群聊维护判断 AbortController 集合与修订号。stopChat 同时取消当前判断、Agent 输出和后续群聊发言，保留当前已生成文本为 stopped 消息。generation-state 明确表示整个轮次是否结束。
+**进行中任务表**：Agent 层维护 `Map<runtimeId, Set<AbortController>>`（普通/定时使用 chatId，目标任务使用 executionId）；编排层为每个进行中群聊维护判断 AbortController 集合与修订号。stopChat 同时取消当前判断、Agent 输出和后续群聊发言，保留当前已生成文本为 stopped 消息。generation-state 明确表示整个轮次是否结束。
 **Mock provider（冒烟测试）**：kind='mock' 时不走 pi，直接按名字模板生成流式假回复（`main/mockProvider.ts`）。
 
 ## 9. UI 规范

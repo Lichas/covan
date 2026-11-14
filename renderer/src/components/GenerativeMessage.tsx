@@ -3,12 +3,13 @@ import { createLibrary, Renderer, type ElementNode } from '@openuidev/react-lang
 import {
   Card, Text, Metric, Table, BarChart, LineChart, AreaChart, PieChart, RadarChart, RadialChart, ScatterChart,
   Callout, Tag, List, Separator, Stack, Tabs, TabItem, Accordion, AccordionItem, Steps, StepsItem,
-  Choices, Form, splitUiMessage, validateUiSource, uiReplyText, UI_MAX_SOURCE,
+  Choices, Form, GoalsBoard, GoalCreateCard, GoalDetail, GoalConfirmDelete, splitUiMessage, validateUiSource, uiReplyText, UI_MAX_SOURCE,
 } from '@shared/openui'
 import { MarkdownContent } from './MarkdownContent'
 import { ChevronRightIcon } from './icons'
 import { LineChartView, PieChartView, RadarChartView, RadialChartView, ScatterChartView } from './GenerativeCharts'
 import { AccordionView, CalloutView, ListView, SeparatorView, StackView, StepsView, TabsView, TagView } from './GenerativeBlocks'
+import { GoalConfirmDeleteCardView, GoalCreateCardView, GoalDetailCardView, GoalsBoardView } from './GoalCards'
 import './generativeUi.css'
 
 type RenderNode = (value: unknown) => ReactNode
@@ -61,6 +62,26 @@ function ReplyForm({ title, fields }: { title: string; fields: { label: string; 
   </form>
 }
 
+function GoalsBoardComponent({ props }: { props: { source?: 'user_goal' | 'assistant_tracking'; status?: ('ACTIVE' | 'PAUSED' | 'RETIRED' | 'COMPLETED')[] } }) {
+  const { disabled } = useContext(Interaction)
+  return <GoalsBoardView {...props} disabled={disabled} />
+}
+
+function GoalCreateComponent({ props }: { props: { title?: string; category?: 'HEALTH' | 'RELATIONSHIPS' | 'MONEY' | 'CAREER' | 'INTERESTS' | 'PRODUCTIVITY' | 'SOMETHING_ELSE'; source?: 'user_goal' | 'assistant_tracking'; subGoals?: { title: string; emoji?: string }[] } }) {
+  const { disabled } = useContext(Interaction)
+  return <GoalCreateCardView {...props} disabled={disabled} />
+}
+
+function GoalDetailComponent({ props }: { props: { goalId: string } }) {
+  const { disabled } = useContext(Interaction)
+  return <GoalDetailCardView goalId={props.goalId} disabled={disabled} />
+}
+
+function GoalConfirmDeleteComponent({ props }: { props: { goalId: string } }) {
+  const { disabled } = useContext(Interaction)
+  return <GoalConfirmDeleteCardView goalId={props.goalId} disabled={disabled} />
+}
+
 const library = createLibrary({ root: 'Card', components: [
   { ...Card, component: ({ props, renderNode }) => <section className="genui-card"><h3>{props.title}</h3><div className="genui-card-content">{renderNode(props.children)}</div></section> },
   { ...Text, component: ({ props }) => <p className="genui-text">{props.text}</p> },
@@ -89,6 +110,10 @@ const library = createLibrary({ root: 'Card', components: [
   { ...AccordionItem, component: () => null },
   { ...Choices, component: ({ props }) => <ChoiceButtons prompt={props.prompt} options={props.options} /> },
   { ...Form, component: ({ props }) => <ReplyForm title={props.title} fields={props.fields} /> },
+  { ...GoalsBoard, component: ({ props }) => <GoalsBoardComponent props={props} /> },
+  { ...GoalCreateCard, component: ({ props }) => <GoalCreateComponent props={props} /> },
+  { ...GoalDetail, component: ({ props }) => <GoalDetailComponent props={props} /> },
+  { ...GoalConfirmDelete, component: ({ props }) => <GoalConfirmDeleteComponent props={props} /> },
 ] })
 
 function SourceFallback({ source, reason, pending }: { source: string; reason?: string; pending?: boolean }) {

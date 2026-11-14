@@ -8,7 +8,7 @@ import type { CovanEvent, Message } from '../shared/types'
 import { CH } from '../shared/ipcChannels'
 import { getBot, getChat, getDb, getSetting, initDb } from './db'
 import { initWorkspace, resolveWorkspaceFile } from './workspace'
-import { initialVibrancy, setShellWindow } from './windowShell'
+import { initialVibrancy, setShellWindow, getShellWindow } from './windowShell'
 import { initOrchestrator, runScheduledTask } from './orchestrator'
 import { configureWebNetworkAdapter } from './tools/web'
 import { renderWebPage } from './tools/browser'
@@ -30,6 +30,10 @@ import { closeMcpSessions, configureMcpFetch } from './extensions/mcp'
 import { initResponseDecisionEngine } from './decisionStrategy'
 import { notificationBody } from './notificationText'
 import { registerWorkspaceHtmlPreview } from './workspaceHtmlPreview'
+import { recoverGoalExecutions, executionById } from './goals'
+import { startGoalExecutions, stopAllGoalExecutions } from './goalExecution'
+import { configureBrowserController } from './browser/tools'
+import { closeAllBrowsers, executeBrowserCommand, releaseBrowserScope } from './browser/controller'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const configuredUserData = process.env.COVAN_USER_DATA_DIR
@@ -37,6 +41,14 @@ const defaultUserData = path.join(os.homedir(), '.covans')
 
 // 测试可覆盖为临时目录；正常运行时应用数据和 Agent 工作区统一位于 ~/.covans。
 app.setPath('userData', configuredUserData || defaultUserData)
+
+// Own the profile before migration/recovery can touch its durable task state.
+const ownsUserData = app.requestSingleInstanceLock()
+if (!ownsUserData) app.quit()
+app.on('second-instance', () => {
+  const win = getShellWindow()
+  if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus() }
+})
 
 /** 应用数据统一放在 ~/.covans（测试可覆盖为临时目录），不存在时创建。 */
 function prepareUserDataDir(userData: string): void {
@@ -224,7 +236,7 @@ const liveNotifications = new Set<Notification>()
 
 /** 把通知点击带到对应会话；窗口不在时先创建，再在加载完成后发送。 */
 function openChatFromNotification(chatId: string): void {
-  let win = BrowserWindow.getAllWindows()[0]
+  let win = getShellWindow()
   if (!win) win = createWindow()
   if (!win) return
   win.show()
@@ -249,7 +261,7 @@ function notifyBotMessage(chatId: string, message: Message): void {
   if (!chat) return
   const bot = message.sender_bot_id ? getBot(message.sender_bot_id) : null
   if (bot && bot.notify === 0) return
-  const focused = BrowserWindow.getFocusedWindow()
+  const focused = getShellWindow()
   if (focused && !focused.isDestroyed() && focused.isFocused()) return
   const body = notificationBody(message.content)
   if (!body) return
@@ -272,7 +284,10 @@ function notifyBotMessage(chatId: string, message: Message): void {
 
 /** 向所有窗口广播 Covan 事件 */
 function broadcast(ev: CovanEvent): void {
-  if (ev.type === 'message-done') notifyBotMessage(ev.chatId, ev.message)
+  if (ev.type === 'message-done') {
+    const run = ev.message.goal_execution_id ? executionById(ev.message.goal_execution_id) : undefined
+    if (!run || (!run.parentExecutionId && ['review', 'waiting_input', 'blocked', 'error'].includes(run.status))) notifyBotMessage(ev.chatId, ev.message)
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     try {
       win.webContents.send(CH.event, ev)
@@ -346,12 +361,13 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-void app.whenReady().then(async () => {
+if (ownsUserData) void app.whenReady().then(async () => {
   const userData = app.getPath('userData')
   prepareUserDataDir(userData)
   registerImageProtocols(userData)
   registerWorkspaceHtmlPreview()
   initDb(userData)
+  recoverGoalExecutions()
   repairWelcomeNames()
   startMemorySummaries()
   initObservability(userData)
@@ -398,6 +414,7 @@ void app.whenReady().then(async () => {
     )
     .run()
   initWorkspace(userData)
+  configureBrowserController(executeBrowserCommand, releaseBrowserScope)
   configureWebNetworkAdapter({
     fetch: (url, init) =>
       net.fetch(url, { ...init, bypassCustomProtocolHandlers: true }),
@@ -422,13 +439,14 @@ void app.whenReady().then(async () => {
     )
     .run()
   initOrchestrator({ emit: broadcast })
+  startGoalExecutions()
   startScheduledTasks(runScheduledTask)
   registerIpc()
   setDockIcon()
   createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (!getShellWindow()) createWindow()
   })
 })
 
@@ -438,10 +456,11 @@ app.on('window-all-closed', () => {
 
 let extensionsClosed = false
 app.on('before-quit', (event) => {
+  if (!ownsUserData) return
   stopMemorySummaries()
   stopScheduledTasks()
   if (!extensionsClosed) {
     event.preventDefault()
-    void closeMcpSessions().finally(() => { extensionsClosed = true; app.quit() })
+    void Promise.all([stopAllGoalExecutions(), closeAllBrowsers(), closeMcpSessions()]).finally(() => { extensionsClosed = true; app.quit() })
   }
 })
